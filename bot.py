@@ -34,6 +34,51 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ─── Конвертер Markdown → HTML (для Telegram) ────────────────────────────────
+
+def md_to_html(text: str) -> str:
+    """
+    Конвертирует базовый Markdown (который генерирует Claude) в Telegram HTML.
+    Порядок важен: сначала ссылки, потом жирный/курсив.
+    """
+    import re, html
+
+    # 1. Экранируем HTML-спецсимволы КРОМЕ тех, что мы сами добавим тегами
+    #    Делаем это поэтапно через placeholder-технику
+    # Сначала вытаскиваем [текст](url) — ссылки
+    links = []
+    def save_link(m):
+        link_text = m.group(1)
+        url = m.group(2)
+        # Экранируем содержимое
+        safe_text = html.escape(link_text)
+        safe_url  = html.escape(url)
+        placeholder = f"\x00LINK{len(links)}\x00"
+        links.append(f'<a href="{safe_url}">{safe_text}</a>')
+        return placeholder
+
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', save_link, text)
+
+    # 2. Экранируем оставшийся текст
+    text = html.escape(text)
+
+    # 3. Восстанавливаем ссылки
+    for i, link_html in enumerate(links):
+        text = text.replace(f"\x00LINK{i}\x00", link_html)
+
+    # 4. **жирный** → <b>жирный</b>
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+
+    # 5. *курсив* или _курсив_ → <i>курсив</i>
+    text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)
+    text = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'<i>\1</i>', text)
+
+    # 6. `моноширинный` → <code>моноширинный</code>
+    text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
+
+    return text
+
+
 # ─── Хранилище истории диалогов ───────────────────────────────────────────────
 conversation_histories: dict[int, list] = {}
 MAX_HISTORY_PAIRS = 10
@@ -166,13 +211,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         bot_msg = None
         for i, chunk in enumerate(chunks):
             is_last = (i == len(chunks) - 1)
+            html_chunk = md_to_html(chunk)
             try:
                 bot_msg = await update.message.reply_text(
-                    chunk,
-                    parse_mode="Markdown",
+                    html_chunk,
+                    parse_mode="HTML",
                     reply_markup=keyboard if is_last else None,
                 )
             except Exception:
+                # Последний fallback — plain text без разметки
                 bot_msg = await update.message.reply_text(
                     chunk,
                     reply_markup=keyboard if is_last else None,
