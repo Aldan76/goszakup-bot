@@ -29,7 +29,23 @@ create index if not exists chunks_fts_idx on chunks using gin(fts);
 -- Индекс по типу документа
 create index if not exists chunks_source_type_idx on chunks(source_type);
 
--- Функция поиска по тексту (вызывается из Python)
+-- ─── Таблица для хранения оценок ответов ─────────────────────────────────────
+
+create table if not exists feedback (
+    id          bigserial primary key,
+    chat_id     bigint not null,
+    message_id  bigint not null,
+    question    text not null,
+    answer      text not null,
+    rating      text not null check (rating in ('like', 'dislike')),
+    comment     text,                        -- комментарий при дизлайке
+    created_at  timestamptz default now()
+);
+
+create index if not exists feedback_chat_idx on feedback(chat_id);
+create index if not exists feedback_rating_idx on feedback(rating);
+
+-- ─── Функция поиска по тексту (вызывается из Python) ─────────────────────────
 create or replace function search_chunks(query_text text, match_count int default 6)
 returns table (
     id text,
