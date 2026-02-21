@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Админ-панель | Goszakup Bot</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    /* ── Логин ── */
+    #login-screen {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+    .login-box {
+      background: #1e2130;
+      border: 1px solid #2d3252;
+      border-radius: 12px;
+      padding: 40px;
+      width: 360px;
+      text-align: center;
+    }
+    .login-box h1 { font-size: 22px; margin-bottom: 8px; color: #fff; }
+    .login-box p  { color: #718096; font-size: 14px; margin-bottom: 28px; }
+    .login-box input {
+      width: 100%;
+      padding: 12px 16px;
+      background: #0f1117;
+      border: 1px solid #2d3252;
+      border-radius: 8px;
+      color: #e2e8f0;
+      font-size: 15px;
+      margin-bottom: 14px;
+    }
+    .login-box input:focus { outline: none; border-color: #5b6af0; }
+    .btn-primary {
+      width: 100%;
+      padding: 12px;
+      background: #5b6af0;
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .btn-primary:hover { background: #4a58d8; }
+    #login-error { color: #fc8181; font-size: 13px; margin-top: 10px; }
+
+    /* ── Основной интерфейс ── */
+    #app { display: none; }
+
+    header {
+      background: #1e2130;
+      border-bottom: 1px solid #2d3252;
+      padding: 14px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 { font-size: 18px; font-weight: 700; color: #fff; }
+    header .subtitle { font-size: 12px; color: #718096; margin-top: 2px; }
+    .logout-btn {
+      background: transparent;
+      border: 1px solid #2d3252;
+      border-radius: 6px;
+      color: #718096;
+      padding: 6px 14px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all .2s;
+    }
+    .logout-btn:hover { border-color: #fc8181; color: #fc8181; }
+
+    /* ── Навигация ── */
+    nav {
+      display: flex;
+      gap: 4px;
+      padding: 16px 28px 0;
+      border-bottom: 1px solid #2d3252;
+    }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: #718096;
+      padding: 8px 18px 12px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all .2s;
+    }
+    .tab-btn:hover { color: #e2e8f0; }
+    .tab-btn.active { color: #5b6af0; border-bottom-color: #5b6af0; }
+
+    /* ── Контент ── */
+    main { padding: 28px; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* ── Карточки статистики ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .stat-card {
+      background: #1e2130;
+      border: 1px solid #2d3252;
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .stat-card .label { font-size: 12px; color: #718096; margin-bottom: 8px; text-transform: uppercase; letter-spacing: .5px; }
+    .stat-card .value { font-size: 32px; font-weight: 700; color: #fff; }
+    .stat-card .sub   { font-size: 12px; color: #5b6af0; margin-top: 4px; }
+
+    /* ── Таблицы ── */
+    .section-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .table-wrap {
+      background: #1e2130;
+      border: 1px solid #2d3252;
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 28px;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      background: #161827;
+      padding: 11px 16px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      color: #718096;
+    }
+    td {
+      padding: 11px 16px;
+      font-size: 13px;
+      border-top: 1px solid #2d3252;
+      vertical-align: top;
+    }
+    tr:hover td { background: #252840; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-green { background: #1a4731; color: #68d391; }
+    .badge-blue  { background: #1a2e5a; color: #63b3ed; }
+    .badge-red   { background: #4a1942; color: #fc8181; }
+
+    /* ── Поиск и фильтры ── */
+    .toolbar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .search-input {
+      flex: 1;
+      min-width: 200px;
+      padding: 9px 14px;
+      background: #1e2130;
+      border: 1px solid #2d3252;
+      border-radius: 8px;
+      color: #e2e8f0;
+      font-size: 14px;
+    }
+    .search-input:focus { outline: none; border-color: #5b6af0; }
+    .btn-sm {
+      padding: 9px 16px;
+      background: #1e2130;
+      border: 1px solid #2d3252;
+      border-radius: 8px;
+      color: #e2e8f0;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all .2s;
+      white-space: nowrap;
+    }
+    .btn-sm:hover { border-color: #5b6af0; color: #5b6af0; }
+    .btn-sm.active-filter { border-color: #5b6af0; background: #1a2040; color: #5b6af0; }
+
+    /* ── Диалог пользователя ── */
+    .dialog-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.6);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    .dialog-overlay.open { display: flex; }
+    .dialog {
+      background: #1e2130;
+      border: 1px solid #2d3252;
+      border-radius: 12px;
+      width: 90%;
+      max-width: 720px;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .dialog-header {
+      padding: 18px 24px;
+      border-bottom: 1px solid #2d3252;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .dialog-header h2 { font-size: 16px; color: #fff; }
+    .dialog-close {
+      background: transparent;
+      border: none;
+      color: #718096;
+      font-size: 22px;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .dialog-close:hover { color: #fc8181; }
+    .dialog-body {
+      padding: 20px 24px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    /* ── Сообщения диалога ── */
+    .msg-pair { margin-bottom: 20px; }
+    .msg-time { font-size: 11px; color: #4a5568; margin-bottom: 6px; }
+    .msg-q, .msg-a {
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.6;
+      margin-bottom: 6px;
+      word-break: break-word;
+    }
+    .msg-q { background: #252840; border-left: 3px solid #5b6af0; }
+    .msg-a { background: #1a2e1a; border-left: 3px solid #48bb78; font-size: 12.5px; color: #cbd5e0; }
+    .msg-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 3px; }
+    .msg-label.user { color: #5b6af0; }
+    .msg-label.bot  { color: #48bb78; }
+    .meta-chips { display: flex; gap: 6px; margin-top: 4px; }
+
+    /* ── Загрузка ── */
+    .loading { text-align: center; padding: 40px; color: #718096; font-size: 14px; }
+    .empty   { text-align: center; padding: 40px; color: #4a5568; font-size: 14px; }
+
+    /* ── Пагинация ── */
+    .pagination {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      padding-top: 8px;
+    }
+    .page-btn {
+      padding: 6px 12px;
+      background: #1e2130;
+      border: 1px solid #2d3252;
+      border-radius: 6px;
+      color: #e2e8f0;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .page-btn:hover { border-color: #5b6af0; }
+    .page-btn.current { background: #5b6af0; border-color: #5b6af0; color: #fff; }
+    .page-btn:disabled { opacity: .4; cursor: default; }
+
+    /* ── Feedback ── */
+    .feedback-table .like   { color: #68d391; }
+    .feedback-table .dislike { color: #fc8181; }
+  </style>
+</head>
+<body>
+
+<!-- ═══ ЭКРАН ВХОДА ═══════════════════════════════════════════ -->
+<div id="login-screen">
+  <div class="login-box">
+    <h1>🛡️ Goszakup Bot</h1>
+    <p>Административная панель</p>
+    <input type="password" id="pwd-input" placeholder="Пароль" />
+    <button class="btn-primary" onclick="doLogin()">Войти</button>
+    <div id="login-error"></div>
+  </div>
+</div>
+
+<!-- ═══ ОСНОВНОЙ ИНТЕРФЕЙС ════════════════════════════════════ -->
+<div id="app">
+
+  <header>
+    <div>
+      <h1>📊 Goszakup Bot — Панель администратора</h1>
+      <div class="subtitle">Статистика и история переписки</div>
+    </div>
+    <button class="logout-btn" onclick="doLogout()">Выйти</button>
+  </header>
+
+  <nav>
+    <button class="tab-btn active" onclick="switchTab('overview')">📈 Обзор</button>
+    <button class="tab-btn" onclick="switchTab('users')">👥 Пользователи</button>
+    <button class="tab-btn" onclick="switchTab('conversations')">💬 Переписка</button>
+    <button class="tab-btn" onclick="switchTab('feedback')">⭐ Отзывы</button>
+  </nav>
+
+  <main>
+
+    <!-- ── ОБЗОР ── -->
+    <div id="tab-overview" class="tab-content active">
+      <div class="stats-grid" id="stats-cards">
+        <div class="stat-card"><div class="label">Загрузка...</div><div class="value">—</div></div>
+      </div>
+
+      <div class="section-title">🕐 Последние сообщения</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Время</th><th>Пользователь</th><th>Вопрос</th><th>Чанков</th><th>КТРУ</th>
+          </tr></thead>
+          <tbody id="recent-body"><tr><td colspan="5" class="loading">Загрузка...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── ПОЛЬЗОВАТЕЛИ ── -->
+    <div id="tab-users" class="tab-content">
+      <div class="toolbar">
+        <input class="search-input" id="user-search" placeholder="🔍 Поиск по имени или @username..." oninput="filterUsers()"/>
+        <button class="btn-sm" onclick="loadUsers()">↻ Обновить</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Пользователь</th><th>Chat ID</th><th>Язык</th><th>Сообщений</th><th>Первый визит</th><th>Последний визит</th><th></th>
+          </tr></thead>
+          <tbody id="users-body"><tr><td colspan="7" class="loading">Загрузка...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="users-pagination"></div>
+    </div>
+
+    <!-- ── ПЕРЕПИСКА ── -->
+    <div id="tab-conversations" class="tab-content">
+      <div class="toolbar">
+        <input class="search-input" id="conv-search" placeholder="🔍 Поиск по тексту вопроса..."/>
+        <button class="btn-sm" id="filter-ktru" onclick="toggleKtruFilter()">КТРУ только</button>
+        <button class="btn-sm" onclick="applyConvFilter()">Найти</button>
+        <button class="btn-sm" onclick="resetConvFilter()">Сбросить</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Время</th><th>Пользователь</th><th>Вопрос</th><th>Чанков</th><th>КТРУ</th><th></th>
+          </tr></thead>
+          <tbody id="conv-body"><tr><td colspan="6" class="loading">Загрузка...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="conv-pagination"></div>
+    </div>
+
+    <!-- ── ОТЗЫВЫ ── -->
+    <div id="tab-feedback" class="tab-content">
+      <div class="toolbar">
+        <button class="btn-sm active-filter" id="fb-all"    onclick="setFbFilter('all')">Все</button>
+        <button class="btn-sm" id="fb-like"   onclick="setFbFilter('like')">👍 Полезно</button>
+        <button class="btn-sm" id="fb-dislike" onclick="setFbFilter('dislike')">👎 Не полезно</button>
+        <button class="btn-sm" onclick="loadFeedback()">↻ Обновить</button>
+      </div>
+      <div class="table-wrap feedback-table">
+        <table>
+          <thead><tr>
+            <th>Время</th><th>Оценка</th><th>Вопрос</th><th>Комментарий</th>
+          </tr></thead>
+          <tbody id="feedback-body"><tr><td colspan="4" class="loading">Загрузка...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="fb-pagination"></div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ═══ ДИАЛОГ ПОЛЬЗОВАТЕЛЯ ══════════════════════════════════ -->
+<div class="dialog-overlay" id="dialog-overlay" onclick="closeDialog(event)">
+  <div class="dialog">
+    <div class="dialog-header">
+      <h2 id="dialog-title">История диалога</h2>
+      <button class="dialog-close" onclick="closeDialogBtn()">×</button>
+    </div>
+    <div class="dialog-body" id="dialog-body"></div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+//  КОНФИГУРАЦИЯ — замените при необходимости
+// ═══════════════════════════════════════════════════════════════
+const SUPABASE_URL = 'https://eozhplrnhhzszltwxhpb.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVvemhwbHJuaGh6c3psdHd4aHBiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE1Njg3MTIsImV4cCI6MjA4NzE0NDcxMn0.bqSKyIDMiucvRgvScVxFoljrDbmzN0wTfDIR1iGS0eU';
+
+// Пароль для входа (хранится в браузере)
+const ADMIN_PASSWORD = 'Goszakup2025!';
+
+const PAGE_SIZE = 25;
+
+// ───────────────────────────────────────────────────────────────
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let allUsers = [];
+let convPage = 0, convKtruOnly = false, convSearch = '';
+let fbFilter = 'all', fbPage = 0;
+let usersPage = 0;
+
+// ── Авторизация ────────────────────────────────────────────────
+function doLogin() {
+  const pwd = document.getElementById('pwd-input').value;
+  if (pwd === ADMIN_PASSWORD) {
+    localStorage.setItem('admin_auth', '1');
+    showApp();
+  } else {
+    document.getElementById('login-error').textContent = 'Неверный пароль';
+  }
+}
+document.getElementById('pwd-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+function doLogout() {
+  localStorage.removeItem('admin_auth');
+  location.reload();
+}
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  loadOverview();
+}
+if (localStorage.getItem('admin_auth') === '1') showApp();
+
+// ── Навигация ─────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  const tabs = ['overview','users','conversations','feedback'];
+  document.querySelectorAll('.tab-btn')[tabs.indexOf(name)].classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'overview')       loadOverview();
+  if (name === 'users')          loadUsers();
+  if (name === 'conversations')  { convPage=0; loadConversations(); }
+  if (name === 'feedback')       { fbPage=0; loadFeedback(); }
+}
+
+// ── Утилиты ───────────────────────────────────────────────────
+function fmtDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleString('ru-RU', {
+    day:'2-digit', month:'2-digit', year:'2-digit',
+    hour:'2-digit', minute:'2-digit'
+  });
+}
+function truncate(str, n) {
+  if (!str) return '';
+  return str.length > n ? str.slice(0, n) + '…' : str;
+}
+function userName(u) {
+  let name = [u.first_name, u.last_name].filter(Boolean).join(' ') || '—';
+  if (u.username) name += ` <span style="color:#718096">@${u.username}</span>`;
+  return name;
+}
+
+// ── ОБЗОР ─────────────────────────────────────────────────────
+async function loadOverview() {
+  // Статистика
+  const [
+    { count: totalUsers },
+    { count: totalMsgs },
+    { count: todayMsgs },
+    { count: totalFb },
+  ] = await Promise.all([
+    sb.from('users').select('*', { count: 'exact', head: true }),
+    sb.from('conversations').select('*', { count: 'exact', head: true }),
+    sb.from('conversations').select('*', { count: 'exact', head: true })
+      .gte('created_at', new Date(Date.now() - 86400000).toISOString()),
+    sb.from('feedback').select('*', { count: 'exact', head: true }),
+  ]);
+
+  const { count: likeCount } = await sb.from('feedback')
+    .select('*', { count: 'exact', head: true }).eq('rating', 'like');
+
+  document.getElementById('stats-cards').innerHTML = `
+    <div class="stat-card">
+      <div class="label">Пользователей</div>
+      <div class="value">${totalUsers ?? 0}</div>
+      <div class="sub">всего зарегистрировано</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Сообщений</div>
+      <div class="value">${totalMsgs ?? 0}</div>
+      <div class="sub">всего вопросов</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">За 24 часа</div>
+      <div class="value">${todayMsgs ?? 0}</div>
+      <div class="sub">вопросов сегодня</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Отзывов</div>
+      <div class="value">${totalFb ?? 0}</div>
+      <div class="sub">👍 ${likeCount ?? 0} полезных</div>
+    </div>
+  `;
+
+  // Последние сообщения
+  const { data: recent } = await sb.from('conversations')
+    .select('*, users(first_name, last_name, username)')
+    .order('created_at', { ascending: false })
+    .limit(15);
+
+  const tbody = document.getElementById('recent-body');
+  if (!recent?.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">Нет данных</td></tr>';
+    return;
+  }
+  tbody.innerHTML = recent.map(r => `
+    <tr>
+      <td style="white-space:nowrap;color:#718096">${fmtDate(r.created_at)}</td>
+      <td>${r.users ? userName(r.users) : r.chat_id}</td>
+      <td>${truncate(r.question, 80)}</td>
+      <td style="text-align:center"><span class="badge badge-blue">${r.chunks_used}</span></td>
+      <td style="text-align:center">${r.ktru_found ? '<span class="badge badge-green">✓</span>' : ''}</td>
+    </tr>
+  `).join('');
+}
+
+// ── ПОЛЬЗОВАТЕЛИ ──────────────────────────────────────────────
+async function loadUsers() {
+  document.getElementById('users-body').innerHTML =
+    '<tr><td colspan="7" class="loading">Загрузка...</td></tr>';
+  const { data } = await sb.from('users')
+    .select('*')
+    .order('last_seen', { ascending: false });
+  allUsers = data || [];
+  renderUsers();
+}
+
+function filterUsers() { usersPage = 0; renderUsers(); }
+
+function renderUsers() {
+  const q = document.getElementById('user-search').value.toLowerCase();
+  const filtered = allUsers.filter(u =>
+    (u.first_name||'').toLowerCase().includes(q) ||
+    (u.last_name||'').toLowerCase().includes(q) ||
+    (u.username||'').toLowerCase().includes(q) ||
+    String(u.chat_id).includes(q)
+  );
+  const start = usersPage * PAGE_SIZE;
+  const page  = filtered.slice(start, start + PAGE_SIZE);
+  const tbody = document.getElementById('users-body');
+  if (!page.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">Пользователи не найдены</td></tr>';
+    document.getElementById('users-pagination').innerHTML = '';
+    return;
+  }
+  tbody.innerHTML = page.map(u => `
+    <tr>
+      <td>${userName(u)}</td>
+      <td style="color:#718096;font-size:12px">${u.chat_id}</td>
+      <td>${u.language_code || '—'}</td>
+      <td style="text-align:center"><span class="badge badge-blue">${u.message_count}</span></td>
+      <td style="color:#718096;font-size:12px">${fmtDate(u.first_seen)}</td>
+      <td style="color:#718096;font-size:12px">${fmtDate(u.last_seen)}</td>
+      <td>
+        <button class="btn-sm" onclick="openUserHistory(${u.chat_id}, '${(u.first_name||'').replace(/'/g,"\\'")}')">
+          💬 История
+        </button>
+      </td>
+    </tr>
+  `).join('');
+  renderPagination('users-pagination', usersPage, Math.ceil(filtered.length / PAGE_SIZE), p => { usersPage = p; renderUsers(); });
+}
+
+// ── ПЕРЕПИСКА ─────────────────────────────────────────────────
+async function loadConversations() {
+  document.getElementById('conv-body').innerHTML =
+    '<tr><td colspan="6" class="loading">Загрузка...</td></tr>';
+
+  let q = sb.from('conversations')
+    .select('*, users(first_name, last_name, username)', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(convPage * PAGE_SIZE, (convPage + 1) * PAGE_SIZE - 1);
+
+  if (convKtruOnly) q = q.eq('ktru_found', true);
+  if (convSearch)   q = q.ilike('question', `%${convSearch}%`);
+
+  const { data, count } = await q;
+  const tbody = document.getElementById('conv-body');
+  if (!data?.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Ничего не найдено</td></tr>';
+    document.getElementById('conv-pagination').innerHTML = '';
+    return;
+  }
+  tbody.innerHTML = data.map(r => `
+    <tr>
+      <td style="white-space:nowrap;color:#718096;font-size:12px">${fmtDate(r.created_at)}</td>
+      <td>${r.users ? userName(r.users) : `<span style="color:#718096">${r.chat_id}</span>`}</td>
+      <td>${truncate(r.question, 90)}</td>
+      <td style="text-align:center"><span class="badge badge-blue">${r.chunks_used}</span></td>
+      <td style="text-align:center">${r.ktru_found ? '<span class="badge badge-green">✓</span>' : ''}</td>
+      <td>
+        <button class="btn-sm" onclick="openConvDetail(${JSON.stringify(r).replace(/"/g,'&quot;')})">
+          👁 Открыть
+        </button>
+      </td>
+    </tr>
+  `).join('');
+  renderPagination('conv-pagination', convPage, Math.ceil(count / PAGE_SIZE), p => { convPage = p; loadConversations(); });
+}
+
+function applyConvFilter() {
+  convSearch = document.getElementById('conv-search').value.trim();
+  convPage = 0;
+  loadConversations();
+}
+function resetConvFilter() {
+  document.getElementById('conv-search').value = '';
+  convSearch = '';
+  convKtruOnly = false;
+  document.getElementById('filter-ktru').classList.remove('active-filter');
+  convPage = 0;
+  loadConversations();
+}
+function toggleKtruFilter() {
+  convKtruOnly = !convKtruOnly;
+  document.getElementById('filter-ktru').classList.toggle('active-filter', convKtruOnly);
+  convPage = 0;
+  loadConversations();
+}
+
+// ── ОТЗЫВЫ ────────────────────────────────────────────────────
+async function loadFeedback() {
+  document.getElementById('feedback-body').innerHTML =
+    '<tr><td colspan="4" class="loading">Загрузка...</td></tr>';
+  let q = sb.from('feedback')
+    .select('*', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(fbPage * PAGE_SIZE, (fbPage + 1) * PAGE_SIZE - 1);
+  if (fbFilter !== 'all') q = q.eq('rating', fbFilter);
+  const { data, count } = await q;
+  const tbody = document.getElementById('feedback-body');
+  if (!data?.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">Нет отзывов</td></tr>';
+    document.getElementById('fb-pagination').innerHTML = '';
+    return;
+  }
+  tbody.innerHTML = data.map(r => `
+    <tr>
+      <td style="white-space:nowrap;color:#718096;font-size:12px">${fmtDate(r.created_at)}</td>
+      <td style="text-align:center">
+        ${r.rating === 'like'
+          ? '<span class="like" style="font-size:18px">👍</span>'
+          : '<span class="dislike" style="font-size:18px">👎</span>'}
+      </td>
+      <td>${truncate(r.question, 100)}</td>
+      <td style="color:#a0aec0;font-size:12px">${r.comment || ''}</td>
+    </tr>
+  `).join('');
+  renderPagination('fb-pagination', fbPage, Math.ceil(count / PAGE_SIZE), p => { fbPage = p; loadFeedback(); });
+}
+
+function setFbFilter(f) {
+  fbFilter = f;
+  fbPage = 0;
+  ['all','like','dislike'].forEach(x => document.getElementById('fb-'+x).classList.remove('active-filter'));
+  document.getElementById('fb-'+f).classList.add('active-filter');
+  loadFeedback();
+}
+
+// ── Пагинация ─────────────────────────────────────────────────
+function renderPagination(containerId, current, total, onPage) {
+  const el = document.getElementById(containerId);
+  if (total <= 1) { el.innerHTML = ''; return; }
+  let html = `<button class="page-btn" ${current===0?'disabled':''} onclick="(${onPage})(${current-1})">← Назад</button>`;
+  const start = Math.max(0, current - 2);
+  const end   = Math.min(total - 1, current + 2);
+  for (let i = start; i <= end; i++) {
+    html += `<button class="page-btn ${i===current?'current':''}" onclick="(${onPage})(${i})">${i+1}</button>`;
+  }
+  html += `<button class="page-btn" ${current===total-1?'disabled':''} onclick="(${onPage})(${current+1})">Вперёд →</button>`;
+  el.innerHTML = html;
+}
+
+// ── История пользователя ──────────────────────────────────────
+async function openUserHistory(chatId, name) {
+  document.getElementById('dialog-title').textContent = `💬 История: ${name || chatId}`;
+  document.getElementById('dialog-body').innerHTML = '<div class="loading">Загрузка...</div>';
+  document.getElementById('dialog-overlay').classList.add('open');
+
+  const { data } = await sb.from('conversations')
+    .select('*')
+    .eq('chat_id', chatId)
+    .order('created_at', { ascending: true })
+    .limit(100);
+
+  if (!data?.length) {
+    document.getElementById('dialog-body').innerHTML = '<div class="empty">Нет истории</div>';
+    return;
+  }
+  document.getElementById('dialog-body').innerHTML = data.map(r => `
+    <div class="msg-pair">
+      <div class="msg-time">${fmtDate(r.created_at)}</div>
+      <div class="msg-q">
+        <div class="msg-label user">Пользователь</div>
+        ${escHtml(r.question)}
+      </div>
+      <div class="msg-a">
+        <div class="msg-label bot">Бот</div>
+        ${escHtml(truncate(r.answer, 600))}
+        <div class="meta-chips">
+          <span class="badge badge-blue">чанков: ${r.chunks_used}</span>
+          ${r.ktru_found ? '<span class="badge badge-green">КТРУ</span>' : ''}
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── Детальный просмотр одного Q&A ────────────────────────────
+function openConvDetail(r) {
+  document.getElementById('dialog-title').textContent = `💬 ${fmtDate(r.created_at)} · chat ${r.chat_id}`;
+  document.getElementById('dialog-body').innerHTML = `
+    <div class="msg-pair">
+      <div class="msg-q">
+        <div class="msg-label user">Вопрос пользователя</div>
+        ${escHtml(r.question)}
+      </div>
+      <div class="msg-a">
+        <div class="msg-label bot">Ответ бота</div>
+        ${escHtml(r.answer)}
+        <div class="meta-chips">
+          <span class="badge badge-blue">чанков: ${r.chunks_used}</span>
+          ${r.ktru_found ? '<span class="badge badge-green">КТРУ найден</span>' : ''}
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('dialog-overlay').classList.add('open');
+}
+
+function closeDialog(e) {
+  if (e.target === document.getElementById('dialog-overlay'))
+    document.getElementById('dialog-overlay').classList.remove('open');
+}
+function closeDialogBtn() {
+  document.getElementById('dialog-overlay').classList.remove('open');
+}
+
+function escHtml(str) {
+  return String(str||'')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+    .replace(/\n/g,'<br>');
+}
+
+// Закрытие диалога по Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.getElementById('dialog-overlay').classList.remove('open');
+});
+</script>
+</body>
+</html>
