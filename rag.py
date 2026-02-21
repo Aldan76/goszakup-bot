@@ -1,8 +1,11 @@
 """
 rag.py — Логика поиска через Supabase + генерация ответа через Claude API.
 
-Архитектура:
-  Вопрос → keyword поиск в Supabase (PostgreSQL full-text) → топ чанков → Claude → ответ
+Архитектура (двухшаговый поиск):
+  Шаг 1: Проверка перечня ТРУ (ktru_perechen) — если вопрос о товаре/работе/услуге
+          из Приказа №546, добавляем контекст о способе закупки.
+  Шаг 2: Поиск по chunks (PostgreSQL full-text) — релевантные нормы закона/правил.
+  Итог: Claude получает оба контекста и даёт полный ответ.
 """
 
 import os
@@ -28,6 +31,100 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROMPT_PATH = os.path.join(BASE_DIR, "prompts", "system_prompt.txt")
 with open(_PROMPT_PATH, encoding="utf-8") as f:
     SYSTEM_PROMPT = f.read()
+
+# ─── Ключевые слова для детекции вопросов о способе закупки ──────────────────
+
+# Если вопрос содержит эти слова — проверяем перечень ТРУ
+KTRU_TRIGGER_WORDS = [
+    "способ закупки", "способ осуществления", "каким способом", "как закупать",
+    "строительно-монтажные", "строительные работы", "смр",
+    "проектно-сметная документация", "проектно-сметной",
+    "технико-экономическое обоснование", "тэо",
+    "экспертиза проектов", "вневедомственная экспертиза",
+    "инжиниринговые услуги", "технический надзор",
+    "управление проектами",
+    "опасные отходы", "утилизация отходов", "переработка отходов",
+    "услуги связи", "связь",
+    "перечень тру", "перечень товаров", "уполномоченный орган",
+    "приказ 546", "приказ №546",
+    "рейтингово-балльная",
+]
+
+
+def check_ktru_perechen(question: str) -> list[dict]:
+    """
+    Шаг 1: Проверяет, касается ли вопрос позиций из Перечня ТРУ (Приказ №546).
+    Если да — возвращает найденные позиции из таблицы ktru_perechen.
+    Поиск: полнотекстовый по полю nazvanie (russian stemming).
+    """
+    q_lower = question.lower()
+
+    # Быстрая проверка: содержит ли вопрос триггерные слова
+    has_trigger = any(t in q_lower for t in KTRU_TRIGGER_WORDS)
+
+    # Всегда ищем — если есть хотя бы один существительный из сферы закупок
+    try:
+        # Строим tsquery из вопроса для поиска в nazvanie
+        words = re.sub(r"[^\w\s]", " ", q_lower).split()
+        stopwords_ru = {
+            "что", "как", "для", "при", "или", "это", "из", "по", "в", "на", "с",
+            "и", "а", "но", "не", "да", "то", "же", "ли", "есть", "если", "когда",
+            "где", "кто", "чем", "так", "все", "можно", "нужно", "надо",
+            "который", "какой", "свой", "этот", "тот", "один", "быть", "может",
+            "какие", "каким", "какой", "какие", "каком",
+        }
+        keywords = [w for w in words if w not in stopwords_ru and len(w) > 3][:5]
+
+        if not keywords:
+            return []
+
+        tsquery = " | ".join(keywords)  # OR-поиск для широкого охвата
+
+        result = supabase.rpc(
+            "search_ktru_perechen",
+            {"query_text": tsquery}
+        ).execute()
+
+        if result.data:
+            return result.data
+
+        # Fallback: прямой поиск по ILIKE если RPC не дал результатов
+        if has_trigger:
+            # Берём самое длинное ключевое слово для поиска
+            best_kw = max(keywords, key=len) if keywords else None
+            if best_kw and len(best_kw) > 4:
+                result = supabase.table("ktru_perechen").select("*").ilike(
+                    "nazvanie", f"%{best_kw}%"
+                ).execute()
+                return result.data or []
+
+    except Exception:
+        pass
+
+    return []
+
+
+def build_ktru_context(ktru_items: list[dict]) -> str:
+    """Форматирует найденные позиции перечня в контекст для Claude."""
+    if not ktru_items:
+        return ""
+
+    lines = [
+        "# ПЕРЕЧЕНЬ ТРУ С ПРЕДУСТАНОВЛЕННЫМ СПОСОБОМ ЗАКУПКИ",
+        f"Источник: Приказ МФ РК от 15.08.2024 №546 (рег. №34933)",
+        f"URL: https://adilet.zan.kz/rus/docs/V2400034933",
+        "",
+        "Позиции из Перечня, соответствующие запросу:",
+    ]
+
+    for item in ktru_items:
+        lines.append(
+            f"\n{item['num']}. {item['nazvanie']}\n"
+            f"   Способ закупки: {item['sposob']}"
+        )
+
+    return "\n".join(lines)
+
 
 # ─── Стоп-слова для поиска ────────────────────────────────────────────────────
 
@@ -117,7 +214,8 @@ def build_context(chunks: list[dict]) -> str:
 
 def answer_question(question: str, conversation_history: list) -> str:
     """
-    Ищет релевантные чанки в Supabase и отвечает через Claude.
+    Двухшаговый поиск: сначала перечень ТРУ (Приказ №546),
+    потом нормы из chunks. Отвечает через Claude.
 
     Args:
         question: Вопрос пользователя.
@@ -126,16 +224,28 @@ def answer_question(question: str, conversation_history: list) -> str:
     Returns:
         Ответ Claude со ссылками на статьи/пункты.
     """
+    # ── Шаг 1: Проверяем перечень ТРУ (Приказ №546) ───────────────────────────
+    ktru_items = check_ktru_perechen(question)
+    ktru_context = build_ktru_context(ktru_items)
+
+    # ── Шаг 2: Поиск по chunks (нормы Закона и Правил) ────────────────────────
     chunks = search_supabase(question, top_n=6)
 
-    if not chunks:
+    if not chunks and not ktru_items:
         return (
             "По вашему вопросу не найдено релевантных статей в базе знаний.\n"
             "Попробуйте переформулировать вопрос, используя юридические термины."
         )
 
-    context = build_context(chunks)
-    system = SYSTEM_PROMPT + "\n\n# НАЙДЕННЫЕ ДОКУМЕНТЫ\n\n" + context
+    # ── Сборка контекста ───────────────────────────────────────────────────────
+    context_parts = []
+    if ktru_context:
+        context_parts.append(ktru_context)
+    if chunks:
+        context_parts.append("# НАЙДЕННЫЕ ДОКУМЕНТЫ\n\n" + build_context(chunks))
+
+    context = "\n\n".join(context_parts)
+    system = SYSTEM_PROMPT + "\n\n" + context
 
     messages = conversation_history + [{"role": "user", "content": question}]
 
