@@ -13,6 +13,8 @@ bot.py — Telegram-бот консультант по госзакупкам Р
 
 import os
 import logging
+import time
+from collections import defaultdict, deque
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import Conflict
 from telegram.ext import (
@@ -91,6 +93,36 @@ pending_dislike: dict[int, dict] = {}
 # ─── Кэш зарегистрированных пользователей (чтобы не дёргать Supabase каждый раз)
 _registered_users: set[int] = set()
 
+# ─── ID администратора (ваш Telegram chat_id) ────────────────────────────────
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
+
+# ─── Кэш забаненных пользователей (загружается из Supabase при старте) ────────
+_banned_users: set[int] = set()
+
+# ─── Rate limiting ────────────────────────────────────────────────────────────
+# Храним метки времени последних N запросов для каждого chat_id
+_rate_timestamps: dict[int, deque] = defaultdict(lambda: deque())
+RATE_LIMIT_MESSAGES = 5    # не более 5 сообщений...
+RATE_LIMIT_WINDOW   = 60   # ...за 60 секунд
+RATE_LIMIT_COOLDOWN = 300  # пауза 5 минут при превышении
+
+# ─── Антиспам: ключевые слова не по теме ─────────────────────────────────────
+# Если вопрос ТОЛЬКО из этих слов или явно не про закупки — отклоняем
+_OFFTOPIC_PATTERNS = [
+    # Флуд / бессмыслица
+    r"^[а-яёa-z\s]{1,3}$",               # очень короткие (1-3 символа)
+    r"^(.)\1{4,}$",                        # повторяющийся символ (аааааа)
+    r"^\d+$",                              # только цифры
+    # Явно не тематические
+    r"\b(погода|курс\s+(валют|доллар|евро)|рецепт|кино|фильм|игр[аы]|футбол|казино|крипт|биткоин|секс|порно|наркотик)\b",
+]
+
+import re as _re
+_OFFTOPIC_COMPILED = [_re.compile(p, _re.IGNORECASE) for p in _OFFTOPIC_PATTERNS]
+
+# Минимальная длина вопроса (защита от одиночных символов)
+MIN_QUESTION_LEN = 4
+
 
 # ─── Регистрация / обновление пользователя в Supabase ─────────────────────────
 
@@ -112,6 +144,86 @@ def upsert_user(user) -> None:
         logger.info(f"[user] Зарегистрирован/обновлён: chat_id={user.id} username={user.username}")
     except Exception as e:
         logger.warning(f"[user] Ошибка upsert_user: {e}")
+
+
+# ─── Загрузка забаненных пользователей из Supabase ───────────────────────────
+
+def load_banned_users() -> None:
+    """Загружает список забаненных пользователей при старте бота."""
+    global _banned_users
+    try:
+        result = supabase.table("users").select("chat_id").eq("is_banned", True).execute()
+        _banned_users = {row["chat_id"] for row in (result.data or [])}
+        logger.info(f"[ban] Загружено забаненных: {len(_banned_users)}")
+    except Exception as e:
+        logger.warning(f"[ban] Ошибка загрузки banned: {e}")
+
+
+def is_banned(chat_id: int) -> bool:
+    return chat_id in _banned_users
+
+
+def ban_user(chat_id: int) -> bool:
+    """Баним пользователя в Supabase и кэше."""
+    try:
+        supabase.table("users").update({"is_banned": True}).eq("chat_id", chat_id).execute()
+        _banned_users.add(chat_id)
+        logger.info(f"[ban] Забанен: {chat_id}")
+        return True
+    except Exception as e:
+        logger.warning(f"[ban] Ошибка бана: {e}")
+        return False
+
+
+def unban_user(chat_id: int) -> bool:
+    """Разбаниваем пользователя."""
+    try:
+        supabase.table("users").update({"is_banned": False}).eq("chat_id", chat_id).execute()
+        _banned_users.discard(chat_id)
+        logger.info(f"[ban] Разбанен: {chat_id}")
+        return True
+    except Exception as e:
+        logger.warning(f"[ban] Ошибка разбана: {e}")
+        return False
+
+
+# ─── Rate limiting ────────────────────────────────────────────────────────────
+
+def check_rate_limit(chat_id: int) -> tuple[bool, int]:
+    """
+    Проверяет, не превышен ли лимит запросов.
+    Возвращает (разрешено, секунд_до_разблокировки).
+    """
+    now = time.time()
+    dq = _rate_timestamps[chat_id]
+
+    # Удаляем старые метки вне окна
+    while dq and now - dq[0] > RATE_LIMIT_WINDOW:
+        dq.popleft()
+
+    if len(dq) >= RATE_LIMIT_MESSAGES:
+        # Превышен лимит — считаем сколько ждать
+        wait = int(RATE_LIMIT_COOLDOWN - (now - dq[0]))
+        return False, max(wait, 1)
+
+    dq.append(now)
+    return True, 0
+
+
+# ─── Антиспам ─────────────────────────────────────────────────────────────────
+
+def is_offtopic(text: str) -> bool:
+    """
+    Проверяет, является ли сообщение явно нетематическим.
+    Возвращает True если нужно отклонить.
+    """
+    t = text.strip()
+    if len(t) < MIN_QUESTION_LEN:
+        return True
+    for pattern in _OFFTOPIC_COMPILED:
+        if pattern.search(t):
+            return True
+    return False
 
 
 def log_conversation(chat_id: int, question: str, answer: str,
@@ -223,6 +335,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if update.effective_user and chat_id not in _registered_users:
         upsert_user(update.effective_user)
         _registered_users.add(chat_id)
+
+    # ── Проверка бана ─────────────────────────────────────────────────────────
+    if is_banned(chat_id):
+        await update.message.reply_text(
+            "⛔ Ваш доступ к боту ограничен. Обратитесь к администратору."
+        )
+        logger.warning(f"[ban] Попытка входа забаненного: {chat_id}")
+        return
+
+    # ── Rate limiting ─────────────────────────────────────────────────────────
+    allowed, wait_sec = check_rate_limit(chat_id)
+    if not allowed:
+        minutes = wait_sec // 60
+        seconds = wait_sec % 60
+        time_str = f"{minutes} мин {seconds} сек" if minutes else f"{seconds} сек"
+        await update.message.reply_text(
+            f"⏳ Вы отправляете сообщения слишком часто.\n"
+            f"Пожалуйста, подождите {time_str}."
+        )
+        logger.warning(f"[rate] Лимит превышен: {chat_id}")
+        return
+
+    # ── Антиспам / нетематический вопрос ─────────────────────────────────────
+    if is_offtopic(user_text):
+        await update.message.reply_text(
+            "❓ Этот бот отвечает только на вопросы по государственным закупкам РК.\n"
+            "Пожалуйста, сформулируйте вопрос по теме."
+        )
+        logger.info(f"[spam] Нетематический вопрос от {chat_id}: {user_text[:50]}")
+        return
 
     # ── Проверяем: ждём ли комментарий к дизлайку? ────────────────────────────
     if chat_id in pending_dislike:
@@ -345,6 +487,72 @@ async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
 
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/ban <chat_id> — забанить пользователя (только для администратора)."""
+    if update.effective_chat.id != ADMIN_CHAT_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Использование: /ban <chat_id>")
+        return
+    try:
+        target = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Неверный chat_id")
+        return
+    if ban_user(target):
+        await update.message.reply_text(f"✅ Пользователь {target} заблокирован.")
+        # Уведомляем самого пользователя
+        try:
+            await context.bot.send_message(
+                target,
+                "⛔ Ваш доступ к боту ограничен администратором."
+            )
+        except Exception:
+            pass
+    else:
+        await update.message.reply_text("❌ Ошибка при блокировке.")
+
+
+async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/unban <chat_id> — разбанить пользователя (только для администратора)."""
+    if update.effective_chat.id != ADMIN_CHAT_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Использование: /unban <chat_id>")
+        return
+    try:
+        target = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Неверный chat_id")
+        return
+    if unban_user(target):
+        await update.message.reply_text(f"✅ Пользователь {target} разблокирован.")
+    else:
+        await update.message.reply_text("❌ Ошибка при разблокировке.")
+
+
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/stats — быстрая статистика (только для администратора)."""
+    if update.effective_chat.id != ADMIN_CHAT_ID:
+        return
+    try:
+        users_res = supabase.table("users").select("*", count="exact", head=True).execute()
+        msgs_res  = supabase.table("conversations").select("*", count="exact", head=True).execute()
+        ban_res   = supabase.table("users").select("*", count="exact", head=True).eq("is_banned", True).execute()
+        fb_res    = supabase.table("feedback").select("*", count="exact", head=True).execute()
+        text = (
+            "📊 Быстрая статистика\n\n"
+            f"👥 Пользователей: {users_res.count}\n"
+            f"💬 Сообщений: {msgs_res.count}\n"
+            f"⛔ Забанено: {ban_res.count}\n"
+            f"⭐ Отзывов: {fb_res.count}\n\n"
+            f"🔗 Панель: https://aldan76.github.io/goszakup-bot/"
+        )
+        await update.message.reply_text(text)
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка неизвестных команд."""
     await update.message.reply_text(
@@ -370,10 +578,16 @@ def main() -> None:
 
     app = Application.builder().token(token).build()
 
+    # Загружаем список забаненных при старте
+    load_banned_users()
+
     # Порядок важен: CallbackQueryHandler должен быть раньше MessageHandler
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help",  help_command))
-    app.add_handler(CommandHandler("clear", clear))
+    app.add_handler(CommandHandler("start",  start))
+    app.add_handler(CommandHandler("help",   help_command))
+    app.add_handler(CommandHandler("clear",  clear))
+    app.add_handler(CommandHandler("ban",    ban_command))
+    app.add_handler(CommandHandler("unban",  unban_command))
+    app.add_handler(CommandHandler("stats",  admin_stats))
     app.add_handler(CallbackQueryHandler(handle_feedback, pattern=r"^(like|dislike)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.COMMAND, handle_unknown))
