@@ -169,7 +169,7 @@ def build_ktru_context(ktru_items: list[dict]) -> str:
             razdel = item.get("razdel") or ""
             razdel_str = f" [{razdel}]" if razdel else ""
             codes = item.get("ektru_codes") or ""
-            codes_str = f"\n   Коды ЕКТРУ: {codes[:100]}" if codes else ""
+            codes_str = f"\n   Коды ЕКТРУ: {codes[:500]}" if codes else ""
             block.append(
                 f"\n  {item['num']}. {item['nazvanie']}{razdel_str}\n"
                 f"  Способ закупки: {item['sposob']}"
@@ -194,13 +194,41 @@ def build_tsquery(question: str) -> str:
     """
     Преобразует вопрос в PostgreSQL tsquery.
     Например: 'демпинговая цена меры' → 'демпинговая & цена & меры'
+    Также применяет замену аббревиатур и синонимов для расширения поиска.
     """
-    words = re.sub(r"[^\w\s]", " ", question.lower()).split()
-    keywords = [w for w in words if w not in STOPWORDS and len(w) > 2]
+    # Замена аббревиатур и синонимов на слова из текстов чанков
+    SYNONYMS = {
+        "ктп":  "товаропроизводителей",
+        "двц":  "внутристрановой",
+        "двц":  "внутристрановой",
+        "ооо":  "организация",
+        "мсб":  "предпринимательство",
+        "мсп":  "предпринимательство",
+        "оои":  "инвалидностью",
+        "смр":  "строительно-монтажные",
+        "тру":  "товаров",
+        "фот":  "труда",
+        "нпа":  "нормативный",
+        "казахстанское содержание": "товаропроизводителей",
+        "казахстанского содержания": "товаропроизводителей",
+        "казахстанском содержании": "товаропроизводителей",
+    }
+    q = question.lower()
+    # Многословные замены сначала
+    for phrase, replacement in SYNONYMS.items():
+        if " " in phrase:
+            q = q.replace(phrase, replacement)
+    words = re.sub(r"[^\w\s]", " ", q).split()
+    expanded = []
+    for w in words:
+        if w in SYNONYMS and " " not in SYNONYMS[w]:
+            expanded.append(SYNONYMS[w])
+        else:
+            expanded.append(w)
+    keywords = [w for w in expanded if w not in STOPWORDS and len(w) > 2]
     if not keywords:
-        # Если все слова — стоп-слова, берём первые 3 слова без фильтрации
         keywords = question.lower().split()[:3]
-    return " & ".join(keywords[:6])  # максимум 6 слов
+    return " & ".join(keywords[:6])
 
 
 # ─── Поиск в Supabase ─────────────────────────────────────────────────────────
