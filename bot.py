@@ -14,6 +14,7 @@ bot.py — Telegram-бот консультант по госзакупкам Р
 import os
 import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.error import Conflict
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -288,6 +289,15 @@ async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Глобальный обработчик ошибок — подавляет Conflict при rolling restart."""
+    if isinstance(context.error, Conflict):
+        # Railway делает rolling restart — временный конфликт, игнорируем
+        logger.warning("Conflict (rolling restart) — игнорируем")
+        return
+    logger.error(f"Ошибка: {context.error}", exc_info=context.error)
+
+
 # ─── Запуск ───────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -304,6 +314,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_feedback, pattern=r"^(like|dislike)$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.COMMAND, handle_unknown))
+    app.add_error_handler(error_handler)
 
     logger.info("Бот запущен (polling)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
