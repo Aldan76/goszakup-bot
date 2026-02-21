@@ -293,6 +293,54 @@
     /* ── Feedback ── */
     .feedback-table .like   { color: #68d391; }
     .feedback-table .dislike { color: #fc8181; }
+
+    /* ── Ban/Unban кнопки ── */
+    .btn-ban {
+      padding: 5px 12px;
+      background: transparent;
+      border: 1px solid #742a2a;
+      border-radius: 6px;
+      color: #fc8181;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all .2s;
+      white-space: nowrap;
+    }
+    .btn-ban:hover { background: #742a2a; }
+    .btn-unban {
+      padding: 5px 12px;
+      background: transparent;
+      border: 1px solid #276749;
+      border-radius: 6px;
+      color: #68d391;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all .2s;
+      white-space: nowrap;
+    }
+    .btn-unban:hover { background: #276749; }
+    .badge-banned { background: #742a2a; color: #fc8181; }
+    .badge-active { background: #1a4731; color: #68d391; }
+    .action-cell { display: flex; gap: 6px; align-items: center; flex-wrap: nowrap; }
+
+    /* ── Toast-уведомления ── */
+    #toast {
+      position: fixed;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: #2d3252;
+      border: 1px solid #5b6af0;
+      border-radius: 8px;
+      padding: 12px 20px;
+      font-size: 14px;
+      color: #e2e8f0;
+      z-index: 999;
+      transition: transform .3s ease;
+      white-space: nowrap;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+    #toast.error { border-color: #fc8181; background: #4a1942; }
   </style>
 </head>
 <body>
@@ -354,9 +402,9 @@
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>Пользователь</th><th>Chat ID</th><th>Язык</th><th>Сообщений</th><th>Первый визит</th><th>Последний визит</th><th></th>
+            <th>Пользователь</th><th>Chat ID</th><th>Статус</th><th>Язык</th><th>Сообщений</th><th>Первый визит</th><th>Последний визит</th><th>Действия</th>
           </tr></thead>
-          <tbody id="users-body"><tr><td colspan="7" class="loading">Загрузка...</td></tr></tbody>
+          <tbody id="users-body"><tr><td colspan="8" class="loading">Загрузка...</td></tr></tbody>
         </table>
       </div>
       <div class="pagination" id="users-pagination"></div>
@@ -402,6 +450,9 @@
 
   </main>
 </div>
+
+<!-- ═══ TOAST ══════════════════════════════════════════════════ -->
+<div id="toast"></div>
 
 <!-- ═══ ДИАЛОГ ПОЛЬЗОВАТЕЛЯ ══════════════════════════════════ -->
 <div class="dialog-overlay" id="dialog-overlay" onclick="closeDialog(event)">
@@ -578,25 +629,36 @@ function renderUsers() {
   const page  = filtered.slice(start, start + PAGE_SIZE);
   const tbody = document.getElementById('users-body');
   if (!page.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">Пользователи не найдены</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">Пользователи не найдены</td></tr>';
     document.getElementById('users-pagination').innerHTML = '';
     return;
   }
-  tbody.innerHTML = page.map(u => `
-    <tr>
+  tbody.innerHTML = page.map(u => {
+    const banned = !!u.is_banned;
+    const statusBadge = banned
+      ? '<span class="badge badge-banned">⛔ Забанен</span>'
+      : '<span class="badge badge-active">✅ Активен</span>';
+    const banBtn = banned
+      ? `<button class="btn-unban" onclick="toggleBan(${u.chat_id}, false)">✅ Разбанить</button>`
+      : `<button class="btn-ban"   onclick="toggleBan(${u.chat_id}, true)">⛔ Забанить</button>`;
+    const safeName = (u.first_name||'').replace(/'/g,"\\'");
+    return `
+    <tr id="user-row-${u.chat_id}">
       <td>${userName(u)}</td>
       <td style="color:#718096;font-size:12px">${u.chat_id}</td>
+      <td>${statusBadge}</td>
       <td>${u.language_code || '—'}</td>
       <td style="text-align:center"><span class="badge badge-blue">${u.message_count}</span></td>
       <td style="color:#718096;font-size:12px">${fmtDate(u.first_seen)}</td>
       <td style="color:#718096;font-size:12px">${fmtDate(u.last_seen)}</td>
       <td>
-        <button class="btn-sm" onclick="openUserHistory(${u.chat_id}, '${(u.first_name||'').replace(/'/g,"\\'")}')">
-          💬 История
-        </button>
+        <div class="action-cell">
+          <button class="btn-sm" onclick="openUserHistory(${u.chat_id}, '${safeName}')">💬 История</button>
+          ${banBtn}
+        </div>
       </td>
-    </tr>
-  `).join('');
+    </tr>`;
+  }).join('');
   renderPagination('users-pagination', usersPage, Math.ceil(filtered.length / PAGE_SIZE), p => { usersPage = p; renderUsers(); });
 }
 
@@ -786,6 +848,44 @@ function escHtml(str) {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') document.getElementById('dialog-overlay').classList.remove('open');
 });
+
+// ── Toast-уведомление ─────────────────────────────────────────
+let _toastTimer = null;
+function showToast(msg, isError = false) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = isError ? 'error show' : 'show';
+  if (_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.className = isError ? 'error' : ''; }, 3000);
+}
+
+// ── Бан / Разбан пользователя ─────────────────────────────────
+async function toggleBan(chatId, ban) {
+  const action = ban ? 'забанить' : 'разбанить';
+  if (!confirm(`Вы уверены, что хотите ${action} пользователя ${chatId}?`)) return;
+
+  const { error } = await sb.from('users')
+    .update({ is_banned: ban })
+    .eq('chat_id', chatId);
+
+  if (error) {
+    console.error('toggleBan error:', error);
+    showToast(`❌ Ошибка: ${error.message}`, true);
+    return;
+  }
+
+  // Обновляем локальный массив allUsers
+  const user = allUsers.find(u => u.chat_id === chatId);
+  if (user) user.is_banned = ban;
+
+  // Перерисовываем только таблицу (без полной перезагрузки)
+  renderUsers();
+
+  showToast(ban
+    ? `⛔ Пользователь ${chatId} заблокирован`
+    : `✅ Пользователь ${chatId} разблокирован`
+  );
+}
 </script>
 </body>
 </html>
