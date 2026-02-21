@@ -286,7 +286,7 @@ def build_context(chunks: list[dict]) -> str:
 
 # ─── Основная функция ─────────────────────────────────────────────────────────
 
-def answer_question(question: str, conversation_history: list) -> str:
+def answer_question(question: str, conversation_history: list) -> tuple[str, int, bool]:
     """
     Двухшаговый поиск: сначала перечень ТРУ (Приказ №546),
     потом нормы из chunks. Отвечает через Claude.
@@ -296,7 +296,7 @@ def answer_question(question: str, conversation_history: list) -> str:
         conversation_history: История диалога.
 
     Returns:
-        Ответ Claude со ссылками на статьи/пункты.
+        Tuple: (ответ Claude, количество найденных чанков, был ли найден КТРУ)
     """
     # ── Шаг 1: Проверяем перечень ТРУ (Приказ №546) ───────────────────────────
     ktru_items = check_ktru_perechen(question)
@@ -308,7 +308,8 @@ def answer_question(question: str, conversation_history: list) -> str:
     if not chunks and not ktru_items:
         return (
             "По вашему вопросу не найдено релевантных статей в базе знаний.\n"
-            "Попробуйте переформулировать вопрос, используя юридические термины."
+            "Попробуйте переформулировать вопрос, используя юридические термины.",
+            0, False
         )
 
     # ── Сборка контекста ───────────────────────────────────────────────────────
@@ -330,7 +331,7 @@ def answer_question(question: str, conversation_history: list) -> str:
         messages=messages,
     )
 
-    return response.content[0].text
+    return response.content[0].text, len(chunks), bool(ktru_items)
 
 
 # ─── Локальное тестирование ───────────────────────────────────────────────────
@@ -359,8 +360,8 @@ if __name__ == "__main__":
 
         print("Думаю...")
         try:
-            answer = answer_question(question, history)
-            print(f"\nОтвет:\n{answer}\n")
+            answer, chunks_used, ktru_found = answer_question(question, history)
+            print(f"\nОтвет (чанков={chunks_used}, ктру={ktru_found}):\n{answer}\n")
             print("-" * 60)
             history.append({"role": "user", "content": question})
             history.append({"role": "assistant", "content": answer})

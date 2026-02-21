@@ -88,6 +88,48 @@ MAX_HISTORY_PAIRS = 10
 # Ключ: chat_id, значение: {question, answer, message_id}
 pending_dislike: dict[int, dict] = {}
 
+# ─── Кэш зарегистрированных пользователей (чтобы не дёргать Supabase каждый раз)
+_registered_users: set[int] = set()
+
+
+# ─── Регистрация / обновление пользователя в Supabase ─────────────────────────
+
+def upsert_user(user) -> None:
+    """
+    Регистрирует нового пользователя или обновляет last_seen.
+    user — объект telegram.User
+    """
+    try:
+        supabase.table("users").upsert({
+            "chat_id":       user.id,
+            "username":      user.username,
+            "first_name":    user.first_name,
+            "last_name":     user.last_name,
+            "language_code": user.language_code,
+            "is_bot":        user.is_bot,
+            "last_seen":     "now()",
+        }, on_conflict="chat_id").execute()
+        logger.info(f"[user] Зарегистрирован/обновлён: chat_id={user.id} username={user.username}")
+    except Exception as e:
+        logger.warning(f"[user] Ошибка upsert_user: {e}")
+
+
+def log_conversation(chat_id: int, question: str, answer: str,
+                     chunks_used: int = 0, ktru_found: bool = False) -> None:
+    """Сохраняет пару вопрос-ответ в таблицу conversations."""
+    try:
+        supabase.table("conversations").insert({
+            "chat_id":     chat_id,
+            "question":    question[:4000],
+            "answer":      answer[:8000],
+            "chunks_used": chunks_used,
+            "ktru_found":  ktru_found,
+        }).execute()
+        # Обновляем счётчик сообщений пользователя
+        supabase.rpc("update_user_last_seen", {"p_chat_id": chat_id}).execute()
+    except Exception as e:
+        logger.warning(f"[conv] Ошибка log_conversation: {e}")
+
 
 # ─── Сохранение фидбека в Supabase ────────────────────────────────────────────
 
@@ -118,6 +160,13 @@ def save_feedback(
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Приветственное сообщение."""
+    # Регистрируем пользователя
+    if update.effective_user:
+        user = update.effective_user
+        if user.id not in _registered_users:
+            upsert_user(user)
+            _registered_users.add(user.id)
+
     text = (
         "Сәлеметсіз бе! / Здравствуйте! 👋\n\n"
         "Я — консультант по государственным закупкам Республики Казахстан.\n\n"
@@ -170,6 +219,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user_text:
         return
 
+    # ── Регистрируем/обновляем пользователя ───────────────────────────────────
+    if update.effective_user and chat_id not in _registered_users:
+        upsert_user(update.effective_user)
+        _registered_users.add(chat_id)
+
     # ── Проверяем: ждём ли комментарий к дизлайку? ────────────────────────────
     if chat_id in pending_dislike:
         data = pending_dislike.pop(chat_id)
@@ -194,7 +248,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info(f"[chat_id={chat_id}] Вопрос: {user_text[:80]}")
 
     try:
-        answer = answer_question(user_text, history)
+        answer, chunks_used, ktru_found = answer_question(user_text, history)
+
+        # Логируем Q&A в Supabase
+        log_conversation(
+            chat_id=chat_id,
+            question=user_text,
+            answer=answer,
+            chunks_used=chunks_used,
+            ktru_found=ktru_found,
+        )
 
         # Сохраняем в историю
         history.append({"role": "user",      "content": user_text})
