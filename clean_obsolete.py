@@ -44,6 +44,7 @@ FILES = [
     (f"{BASE}\\data\\chunks_pravila.json",  "Правила №678"),
     (f"{BASE}\\data\\chunks_reestrov.json", "Правила реестров №646"),
     (f"{BASE}\\data\\chunks_ktp.json",      "Правила КТП №327"),
+    (f"{BASE}\\data\\chunks_dvc.json",      "Методика ДВЦ №260"),
 ]
 
 
