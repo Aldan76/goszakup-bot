@@ -200,7 +200,6 @@ def build_tsquery(question: str) -> str:
     SYNONYMS = {
         "ктп":  "товаропроизводителей",
         "двц":  "внутристрановой",
-        "двц":  "внутристрановой",
         "ооо":  "организация",
         "мсб":  "предпринимательство",
         "мсп":  "предпринимательство",
@@ -266,16 +265,9 @@ def search_supabase(question: str, top_n: int = 6) -> list[dict]:
     except Exception:
         pass
 
-    # Последний fallback: просто берём первые N чанков
-    try:
-        result = supabase.table("chunks").select(
-            "id, document_short, document_name, source_type, "
-            "chapter, chapter_num, article_num, article_title, "
-            "punkt_range, text, official_url, char_count"
-        ).limit(top_n).execute()
-        return result.data or []
-    except Exception:
-        return []
+    # Последний fallback: возвращаем пустой список — лучше честно сказать
+    # что ничего не найдено, чем отдать нерелевантные чанки
+    return []
 
 
 def build_context(chunks: list[dict]) -> str:
@@ -333,7 +325,7 @@ def answer_question(question: str, conversation_history: list) -> str:
 
     response = anthropic_client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=2048,
+        max_tokens=3000,
         system=system,
         messages=messages,
     )
