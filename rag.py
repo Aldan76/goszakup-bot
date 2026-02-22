@@ -238,6 +238,47 @@ def detect_platform(question: str) -> str | None:
     return "goszakup" if gz_score >= om_score else "omarket"
 
 
+# ─── Детектор вопросов про Гражданский кодекс ────────────────────────────────
+
+# Триггерные слова для поиска в ГК РК (civil_code)
+CIVIL_CODE_TRIGGERS = [
+    # Договорное право
+    "договор", "договора", "договоре", "договором", "договорных",
+    "оферта", "оферту", "оферты", "акцепт", "акцепта",
+    "заключение договора", "расторжение договора", "изменение договора",
+    # Обязательства
+    "обязательство", "обязательства", "обязательств", "обязательствах",
+    "исполнение обязательства", "прекращение обязательства",
+    # Ответственность
+    "неустойка", "неустойки", "неустойку", "штраф", "штрафа", "штрафные",
+    "пеня", "пени", "убытки", "убытков", "возмещение убытков",
+    "ущерб", "ущерба", "реальный ущерб", "упущенная выгода",
+    "ответственность сторон", "имущественная ответственность",
+    # Купля-продажа и поставка
+    "поставка товара", "договор поставки", "купля-продажа",
+    "покупатель", "продавец", "поставщик обязан",
+    # Гражданский кодекс
+    "гражданский кодекс", "гк рк", "ст. гк", "статья гк",
+    "нормы гк", "по гк", "согласно гк",
+    # Сделки и форма
+    "недействительная сделка", "ничтожная сделка",
+    "письменная форма", "электронная форма договора",
+    # Иск и претензия
+    "иск", "претензия", "исковая давность", "срок давности",
+    # Казахские эквиваленты
+    "шарт", "шарттың", "шартты", "өтемақы", "айыппұл",
+]
+
+
+def needs_civil_code(question: str) -> bool:
+    """
+    Проверяет, нужно ли дополнительно искать нормы ГК РК.
+    Возвращает True если вопрос касается договорного права, ответственности и т.п.
+    """
+    q = question.lower()
+    return any(t in q for t in CIVIL_CODE_TRIGGERS)
+
+
 # ─── Стоп-слова для поиска ────────────────────────────────────────────────────
 
 STOPWORDS = {
@@ -342,10 +383,11 @@ def build_context(chunks: list[dict]) -> str:
 
 def answer_question(question: str, conversation_history: list) -> tuple[str, int, bool]:
     """
-    Трёхшаговый поиск:
+    Четырёхшаговый поиск:
       Шаг 1 — Перечни ТРУ (КТРУ, ООИ, МСБ)
       Шаг 2 — Инструкции площадок (goszakup / omarket) если вопрос про них
       Шаг 3 — Нормы Закона и Правил госзакупок
+      Шаг 4 — Статьи ГК РК (договоры, ответственность, неустойка) — если нужно
 
     Args:
         question: Вопрос пользователя.
@@ -384,7 +426,12 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
     if not law_chunks and not platform_chunks:
         law_chunks = search_supabase(question, top_n=6)
 
-    all_chunks = platform_chunks + law_chunks
+    # ── Шаг 4: Нормы ГК РК (если вопрос про договоры, ответственность, etc.) ──
+    civil_chunks = []
+    if needs_civil_code(question):
+        civil_chunks = search_supabase(question, top_n=4, platform="civil_code")
+
+    all_chunks = platform_chunks + law_chunks + civil_chunks
 
     if not all_chunks and not ktru_items:
         return (
@@ -401,6 +448,8 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
         context_parts.append(platform_context)
     if law_chunks:
         context_parts.append("# НОРМАТИВНЫЕ ДОКУМЕНТЫ\n\n" + build_context(law_chunks))
+    if civil_chunks:
+        context_parts.append("# ГРАЖДАНСКИЙ КОДЕКС РК (РЕЛЕВАНТНЫЕ СТАТЬИ)\n\n" + build_context(civil_chunks))
 
     context = "\n\n".join(context_parts)
     system = SYSTEM_PROMPT + "\n\n" + context
