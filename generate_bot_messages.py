@@ -113,6 +113,7 @@ def generate_start_message(stats, doc_info):
         "• Какие условия договора поставки?\n\n"
         "⚡ КОМАНДЫ:\n"
         "/help — справка по использованию\n"
+        "/docs — ссылки на все источники (закрепи в чате!)\n"
         "/clear — очистить историю диалога\n\n"
         f"📊 В базе: {total_chunks}+ разделов документов"
     )
@@ -149,6 +150,7 @@ def generate_help_message(stats):
         "📋 КОМАНДЫ:\n"
         "/start — главное меню\n"
         "/help — эта справка\n"
+        "/docs — ссылки на все источники\n"
         "/clear — очистить историю диалога\n\n"
         "⚠️ ВАЖНО:\n"
         "Бот отвечает ТОЛЬКО на основе официальных документов базы знаний.\n"
@@ -160,7 +162,59 @@ def generate_help_message(stats):
     return msg
 
 
-def generate_python_file(start_msg, help_msg, output_file):
+def generate_sources_message():
+    """Генерирует сообщение со ссылками на все официальные источники."""
+
+    # Минимальный набор основных документов без дублей
+    sources = {
+        "ОСНОВНОЕ ЗАКОНОДАТЕЛЬСТВО": [
+            ("Закон РК о государственных закупках (01.07.2024 № 106-VIII ЗРК)",
+             "https://adilet.zan.kz/rus/docs/Z2400000106"),
+            ("Правила осуществления государственных закупок (09.10.2024 № 687)",
+             "https://adilet.zan.kz/rus/docs/V2400035238"),
+            ("Реестры в сфере государственных закупок (2024 № 646)",
+             "https://adilet.zan.kz/rus/docs/V2400035143"),
+        ],
+        "НАЛОГОВОЕ ЗАКОНОДАТЕЛЬСТВО": [
+            ("Налоговый кодекс Республики Казахстан",
+             "https://adilet.zan.kz/rus/docs/K080000210_"),
+        ],
+        "СПЕЦИАЛЬНЫЕ ПРАВИЛА": [
+            ("Правила ведения реестра казахстанского содержания (КТП) (2025 № 327)",
+             "https://adilet.zan.kz/rus/docs/V2500036717"),
+            ("Методика расчета внутристровой ценности (ДВЦ) (20.04.2018 № 260)",
+             "https://adilet.zan.kz/rus/docs/V1800016942"),
+            ("Правила организации питания в школах (31.10.2018 № 598)",
+             "https://adilet.zan.kz/rus/docs/V1800017948"),
+        ],
+        "ИНСТРУКЦИИ ПЛОЩАДОК": [
+            ("Omarket.kz — электронный магазин госзакупок",
+             "https://wiki.omarket.kz"),
+        ],
+    }
+
+    msg = (
+        "📚 ОФИЦИАЛЬНЫЕ ИСТОЧНИКИ БАЗЫ ЗНАНИЙ\n\n"
+        "Вся информация в боте основана на следующих нормативно-правовых актах РК:\n\n"
+    )
+
+    for category, docs in sources.items():
+        msg += f"🔹 {category}\n"
+        for title, url in docs:
+            msg += f"  • {title}\n"
+            msg += f"    {url}\n"
+        msg += "\n"
+
+    msg += (
+        "💡 СОВЕТ:\n"
+        "Закрепите это сообщение в чате (/pin), чтобы ссылки были всегда видны.\n\n"
+        "❓ ВОПРОСЫ: Задавайте их в чате — бот ответит на основе этих источников."
+    )
+
+    return msg
+
+
+def generate_python_file(start_msg, help_msg, sources_msg, output_file):
     """Генерирует Python файл с сообщениями."""
 
     content = '''"""
@@ -187,6 +241,11 @@ bot_messages.py — Автоматически сгенерированные с
 
     content += 'HELP_MESSAGE = (\n'
     for line in help_msg.split('\n'):
+        content += f'    "{escape_string(line)}\\n"\n'
+    content += ')\n\n'
+
+    content += 'SOURCES_MESSAGE = (\n'
+    for line in sources_msg.split('\n'):
         content += f'    "{escape_string(line)}\\n"\n'
     content += ')\n'
 
@@ -217,24 +276,26 @@ def main():
 
     start_msg = generate_start_message(stats, doc_info)
     help_msg = generate_help_message(stats)
+    sources_msg = generate_sources_message()
 
     if args.print_only:
         print("=" * 70)
-        print("/START MESSAGE:")
+        print("MESSAGES GENERATED (use bot_messages.py to view full content)")
         print("=" * 70)
-        print(start_msg)
-        print("\n" + "=" * 70)
-        print("/HELP MESSAGE:")
-        print("=" * 70)
-        print(help_msg)
+        print(f"START_MESSAGE: {len(start_msg)} chars")
+        print(f"HELP_MESSAGE:  {len(help_msg)} chars")
+        print(f"SOURCES_MESSAGE: {len(sources_msg)} chars")
+        print("\nAll messages saved to bot_messages.py")
     else:
-        generate_python_file(start_msg, help_msg, args.output)
+        generate_python_file(start_msg, help_msg, sources_msg, args.output)
         print(f"[OK] Usage in bot.py:\n")
-        print(f"  from bot_messages import START_MESSAGE, HELP_MESSAGE\n")
+        print(f"  from bot_messages import START_MESSAGE, HELP_MESSAGE, SOURCES_MESSAGE\n")
         print(f"  # In start() function:")
         print(f"  await update.message.reply_text(START_MESSAGE)\n")
         print(f"  # In help_command() function:")
-        print(f"  await update.message.reply_text(HELP_MESSAGE)")
+        print(f"  await update.message.reply_text(HELP_MESSAGE)\n")
+        print(f"  # In new docs_command() function:")
+        print(f"  await update.message.reply_text(SOURCES_MESSAGE)")
 
 
 if __name__ == "__main__":

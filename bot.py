@@ -32,7 +32,7 @@ load_dotenv()
 
 # ─── Импорт автоматически генерируемых сообщений ───────────────────────────────
 try:
-    from bot_messages import START_MESSAGE, HELP_MESSAGE
+    from bot_messages import START_MESSAGE, HELP_MESSAGE, SOURCES_MESSAGE
 except ImportError:
     # Fallback если bot_messages.py еще не сгенерирован
     START_MESSAGE = (
@@ -41,6 +41,7 @@ except ImportError:
         "/help — справка"
     )
     HELP_MESSAGE = "Задайте вопрос на русском или казахском языке."
+    SOURCES_MESSAGE = "Ссылки на источники (будут загружены после генерации bot_messages.py)"
 
 # ─── Логирование ──────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -301,6 +302,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Используем автоматически генерируемое сообщение из bot_messages.py
     # При добавлении новых документов запусти: python generate_bot_messages.py
     await update.message.reply_text(HELP_MESSAGE)
+
+
+async def docs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Официальные источники и ссылки на документы."""
+    # Используем автоматически генерируемое сообщение со ссылками из bot_messages.py
+    await update.message.reply_text(SOURCES_MESSAGE, disable_web_page_preview=False)
 
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -572,6 +579,7 @@ def main() -> None:
     # Порядок важен: CallbackQueryHandler должен быть раньше MessageHandler
     app.add_handler(CommandHandler("start",  start))
     app.add_handler(CommandHandler("help",   help_command))
+    app.add_handler(CommandHandler("docs",   docs_command))
     app.add_handler(CommandHandler("clear",  clear))
     app.add_handler(CommandHandler("ban",    ban_command))
     app.add_handler(CommandHandler("unban",  unban_command))
