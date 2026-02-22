@@ -180,6 +180,49 @@ def build_ktru_context(ktru_items: list[dict]) -> str:
     return "# ПЕРЕЧНИ ТРУ С ОСОБЫМ ПОРЯДКОМ ЗАКУПКИ\n\n" + "\n\n".join(sections)
 
 
+# ─── Детектор вопросов про площадки ──────────────────────────────────────────
+
+# Триггеры для goszakup.gov.kz
+GOSZAKUP_TRIGGER_WORDS = [
+    "goszakup", "госзакуп", "портал госзакупок", "портал закупок",
+    "веб-портал", "вебпортал", "как войти на портал", "личный кабинет заказчика",
+    "личный кабинет поставщика", "эцп", "электронная цифровая подпись",
+    "ncalayer", "нклеер", "нкалаер", "казтокен", "kalkan",
+    "как зарегистрироваться", "регистрация на портале", "авторизация",
+    "план госзакупок", "план закупок", "создать объявление", "разместить объявление",
+    "конкурсная документация", "заявка на участие", "ценовое предложение",
+    "электронный конкурс", "аукцион", "запрос ценовых предложений", "зцп",
+    "из одного источника", "договор закупки", "протокол", "отчёт о закупке",
+    "нет заявок", "признан несостоявшимся", "жалоба", "апелляция",
+    "навигация по порталу", "как работать с порталом",
+]
+
+# Триггеры для omarket.kz
+OMARKET_TRIGGER_WORDS = [
+    "omarket", "омаркет", "электронный магазин", "эл.магазин",
+    "интернет-магазин закупок", "магазин госзакупок",
+    "как купить через магазин", "заявка в магазин", "оферта",
+    "каталог товаров", "корзина закупок", "добавить в корзину",
+    "карточка товара", "поставщик в магазине", "подать оферту",
+    "разместить товар", "прайс лист", "прайс-лист поставщика",
+    "подтверждение заявки", "отказ в заявке", "статус заявки",
+    "электронный магазин закупок",
+]
+
+
+def detect_platform(question: str) -> str | None:
+    """
+    Определяет, относится ли вопрос к конкретной площадке.
+    Возвращает 'goszakup', 'omarket' или None (нет специфики площадки).
+    """
+    q = question.lower()
+    gz_score = sum(1 for t in GOSZAKUP_TRIGGER_WORDS if t in q)
+    om_score  = sum(1 for t in OMARKET_TRIGGER_WORDS  if t in q)
+    if gz_score == 0 and om_score == 0:
+        return None
+    return "goszakup" if gz_score >= om_score else "omarket"
+
+
 # ─── Стоп-слова для поиска ────────────────────────────────────────────────────
 
 STOPWORDS = {
@@ -232,41 +275,35 @@ def build_tsquery(question: str) -> str:
 
 # ─── Поиск в Supabase ─────────────────────────────────────────────────────────
 
-def search_supabase(question: str, top_n: int = 6) -> list[dict]:
+def search_supabase(question: str, top_n: int = 6,
+                    platform: str | None = None) -> list[dict]:
     """
     Ищет релевантные чанки в Supabase через PostgreSQL full-text search.
+    Если platform задан ('goszakup'/'omarket'/'law') — фильтрует по нему.
     Возвращает список чанков отсортированных по релевантности.
     """
     tsquery = build_tsquery(question)
+    params = {"query_text": tsquery, "match_count": top_n}
+    if platform:
+        params["platform_filter"] = platform
 
     try:
-        result = supabase.rpc(
-            "search_chunks",
-            {"query_text": tsquery, "match_count": top_n}
-        ).execute()
-
+        result = supabase.rpc("search_chunks", params).execute()
         if result.data:
             return result.data
-
     except Exception:
         pass
 
-    # Fallback: если tsquery не дал результатов — пробуем OR вместо AND
+    # Fallback: OR вместо AND
     try:
-        tsquery_or = " | ".join(tsquery.split(" & "))
-        result = supabase.rpc(
-            "search_chunks",
-            {"query_text": tsquery_or, "match_count": top_n}
-        ).execute()
-
+        params_or = dict(params)
+        params_or["query_text"] = " | ".join(tsquery.split(" & "))
+        result = supabase.rpc("search_chunks", params_or).execute()
         if result.data:
             return result.data
-
     except Exception:
         pass
 
-    # Последний fallback: возвращаем пустой список — лучше честно сказать
-    # что ничего не найдено, чем отдать нерелевантные чанки
     return []
 
 
@@ -275,8 +312,10 @@ def build_context(chunks: list[dict]) -> str:
     parts = []
     for chunk in chunks:
         header = chunk.get("article_title") or chunk.get("chapter") or ""
+        platform = chunk.get("source_platform", "")
+        platform_label = f" [{platform.upper()}]" if platform and platform != "law" else ""
         parts.append(
-            f"[{chunk['id']}] {chunk['document_short']} | {header}\n"
+            f"[{chunk['id']}] {chunk['document_short']}{platform_label} | {header}\n"
             f"Ссылка: {chunk['official_url']}\n"
             f"{chunk['text']}\n"
             f"{'=' * 60}"
@@ -288,8 +327,10 @@ def build_context(chunks: list[dict]) -> str:
 
 def answer_question(question: str, conversation_history: list) -> tuple[str, int, bool]:
     """
-    Двухшаговый поиск: сначала перечень ТРУ (Приказ №546),
-    потом нормы из chunks. Отвечает через Claude.
+    Трёхшаговый поиск:
+      Шаг 1 — Перечни ТРУ (КТРУ, ООИ, МСБ)
+      Шаг 2 — Инструкции площадок (goszakup / omarket) если вопрос про них
+      Шаг 3 — Нормы Закона и Правил госзакупок
 
     Args:
         question: Вопрос пользователя.
@@ -298,17 +339,42 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
     Returns:
         Tuple: (ответ Claude, количество найденных чанков, был ли найден КТРУ)
     """
-    # ── Шаг 1: Проверяем перечень ТРУ (Приказ №546) ───────────────────────────
+    # ── Шаг 1: Перечень ТРУ ───────────────────────────────────────────────────
     ktru_items = check_ktru_perechen(question)
     ktru_context = build_ktru_context(ktru_items)
 
-    # ── Шаг 2: Поиск по chunks (нормы Закона и Правил) ────────────────────────
-    chunks = search_supabase(question, top_n=6)
+    # ── Шаг 2: Определяем платформу и ищем инструкции ────────────────────────
+    platform = detect_platform(question)
+    platform_chunks = []
+    platform_context = ""
 
-    if not chunks and not ktru_items:
+    if platform:
+        # Ищем сначала по конкретной платформе (приоритетно)
+        platform_chunks = search_supabase(question, top_n=4, platform=platform)
+        if platform_chunks:
+            platform_label = "GOSZAKUP.GOV.KZ" if platform == "goszakup" else "OMARKET.KZ"
+            platform_context = (
+                f"# ИНСТРУКЦИИ ПО РАБОТЕ С ПОРТАЛОМ {platform_label}\n\n"
+                + build_context(platform_chunks)
+            )
+
+    # ── Шаг 3: Поиск по нормативным чанкам (закон, правила) ──────────────────
+    # Если вопрос строго про площадку — законодательные нормы менее важны,
+    # берём меньше. Если общий вопрос — берём полный объём.
+    law_top_n = 4 if platform_chunks else 6
+    law_chunks = search_supabase(question, top_n=law_top_n, platform="law")
+
+    # Если фильтр по 'law' не дал результатов (старые чанки без source_platform)
+    # — ищем без фильтра (обратная совместимость)
+    if not law_chunks and not platform_chunks:
+        law_chunks = search_supabase(question, top_n=6)
+
+    all_chunks = platform_chunks + law_chunks
+
+    if not all_chunks and not ktru_items:
         return (
-            "По вашему вопросу не найдено релевантных статей в базе знаний.\n"
-            "Попробуйте переформулировать вопрос, используя юридические термины.",
+            "По вашему вопросу не найдено релевантных материалов в базе знаний.\n"
+            "Попробуйте переформулировать вопрос или уточните название площадки.",
             0, False
         )
 
@@ -316,8 +382,10 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
     context_parts = []
     if ktru_context:
         context_parts.append(ktru_context)
-    if chunks:
-        context_parts.append("# НАЙДЕННЫЕ ДОКУМЕНТЫ\n\n" + build_context(chunks))
+    if platform_context:
+        context_parts.append(platform_context)
+    if law_chunks:
+        context_parts.append("# НОРМАТИВНЫЕ ДОКУМЕНТЫ\n\n" + build_context(law_chunks))
 
     context = "\n\n".join(context_parts)
     system = SYSTEM_PROMPT + "\n\n" + context
@@ -331,7 +399,7 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
         messages=messages,
     )
 
-    return response.content[0].text, len(chunks), bool(ktru_items)
+    return response.content[0].text, len(all_chunks), bool(ktru_items)
 
 
 # ─── Локальное тестирование ───────────────────────────────────────────────────
