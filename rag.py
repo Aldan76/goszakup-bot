@@ -407,14 +407,23 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
 
     messages = conversation_history + [{"role": "user", "content": question}]
 
-    response = anthropic_client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=3000,
-        system=system,
-        messages=messages,
-    )
-
-    return response.content[0].text, len(all_chunks), bool(ktru_items)
+    # Retry при rate limit (до 3 попыток с паузой)
+    for attempt in range(3):
+        try:
+            response = anthropic_client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=3000,
+                system=system,
+                messages=messages,
+            )
+            return response.content[0].text, len(all_chunks), bool(ktru_items)
+        except Exception as e:
+            err = str(e)
+            if "rate_limit" in err and attempt < 2:
+                import time
+                time.sleep(20)
+                continue
+            raise
 
 
 # ─── Локальное тестирование ───────────────────────────────────────────────────
