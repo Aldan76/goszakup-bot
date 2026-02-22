@@ -238,6 +238,42 @@ def detect_platform(question: str) -> str | None:
     return "goszakup" if gz_score >= om_score else "omarket"
 
 
+# ─── Детектор вопросов про Налоговый кодекс ──────────────────────────────────
+
+# Триггерные слова для поиска в Налоговом кодексе (tax)
+TAX_CODE_TRIGGERS = [
+    # НДС
+    "НДС", "ндс", "налог на добавленную стоимость", "добавленная стоимость",
+    "налоговая база", "налоговая ставка", "счет фактура", "счет-фактура",
+    "электронный счет", "авансовый платеж", "авансовый счет",
+    # Налоговые льготы
+    "налоговые льготы", "налоговая льгота", "льгота по НДС",
+    "упрощенное налогообложение", "усн", "льготный режим",
+    # Налоговые резиденты
+    "налоговый резидент", "нерезидент", "налоговый статус",
+    # Учет доходов/расходов
+    "признание дохода", "признание расходов", "налоговый учет",
+    "вычитаемые расходы", "экономически обоснованные",
+    # Налоговый контроль
+    "налоговая проверка", "налоговые органы", "налоговая задолженность",
+    "пени по налогам", "штрафные санкции", "налоговое правонарушение",
+    # Бухгалтерский учет
+    "бухгалтерский учет", "проводка", "счет", "баланс", "отчетность",
+    "финансовая отчетность", "налоговая декларация",
+    # Общие
+    "налог", "налоги", "налоговый", "бухгалтерия", "аккаунтинг",
+]
+
+
+def needs_tax_code(question: str) -> bool:
+    """
+    Проверяет, нужно ли дополнительно искать нормы Налогового кодекса.
+    Возвращает True если вопрос касается НДС, налоговых льгот, учета и т.п.
+    """
+    q = question.lower()
+    return any(t in q for t in TAX_CODE_TRIGGERS)
+
+
 # ─── Детектор вопросов про Гражданский кодекс ────────────────────────────────
 
 # Триггерные слова для поиска в ГК РК (civil_code)
@@ -383,11 +419,12 @@ def build_context(chunks: list[dict]) -> str:
 
 def answer_question(question: str, conversation_history: list) -> tuple[str, int, bool]:
     """
-    Четырёхшаговый поиск:
+    Пятишаговый поиск:
       Шаг 1 — Перечни ТРУ (КТРУ, ООИ, МСБ)
       Шаг 2 — Инструкции площадок (goszakup / omarket) если вопрос про них
       Шаг 3 — Нормы Закона и Правил госзакупок
       Шаг 4 — Статьи ГК РК (договоры, ответственность, неустойка) — если нужно
+      Шаг 5 — Нормы Налогового кодекса (НДС, льготы, учет) — если нужно
 
     Args:
         question: Вопрос пользователя.
@@ -431,7 +468,12 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
     if needs_civil_code(question):
         civil_chunks = search_supabase(question, top_n=4, platform="civil_code")
 
-    all_chunks = platform_chunks + law_chunks + civil_chunks
+    # ── Шаг 5: Нормы Налогового кодекса (если вопрос про НДС, налоги, учет) ─────
+    tax_chunks = []
+    if needs_tax_code(question):
+        tax_chunks = search_supabase(question, top_n=4, platform="tax")
+
+    all_chunks = platform_chunks + law_chunks + civil_chunks + tax_chunks
 
     if not all_chunks and not ktru_items:
         return (
@@ -450,6 +492,8 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
         context_parts.append("# НОРМАТИВНЫЕ ДОКУМЕНТЫ\n\n" + build_context(law_chunks))
     if civil_chunks:
         context_parts.append("# ГРАЖДАНСКИЙ КОДЕКС РК (РЕЛЕВАНТНЫЕ СТАТЬИ)\n\n" + build_context(civil_chunks))
+    if tax_chunks:
+        context_parts.append("# НАЛОГОВЫЙ КОДЕКС РК (НАЛОГИ И УЧЕТ)\n\n" + build_context(tax_chunks))
 
     context = "\n\n".join(context_parts)
     system = SYSTEM_PROMPT + "\n\n" + context

@@ -78,11 +78,11 @@ def upload_platform(platform: str):
 
 def main():
     parser = argparse.ArgumentParser(description="Загрузка инструкций площадок в Supabase")
-    parser.add_argument("--platform", choices=["goszakup", "omarket", "all"],
+    parser.add_argument("--platform", choices=["goszakup", "omarket", "tax", "all"],
                         default="all", help="Какую платформу загружать")
     args = parser.parse_args()
 
-    platforms = ["goszakup", "omarket"] if args.platform == "all" else [args.platform]
+    platforms = ["goszakup", "omarket", "tax"] if args.platform == "all" else [args.platform]
 
     total_ok = total_err = 0
     for p in platforms:
