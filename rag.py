@@ -214,10 +214,25 @@ def detect_platform(question: str) -> str | None:
     """
     Определяет, относится ли вопрос к конкретной площадке.
     Возвращает 'goszakup', 'omarket' или None (нет специфики площадки).
+    Прямое упоминание названия площадки имеет приоритет над контекстными триггерами.
     """
     q = question.lower()
-    gz_score = sum(1 for t in GOSZAKUP_TRIGGER_WORDS if t in q)
-    om_score  = sum(1 for t in OMARKET_TRIGGER_WORDS  if t in q)
+
+    # Прямые названия площадок — высший приоритет
+    has_omarket   = any(t in q for t in ["omarket", "омаркет"])
+    has_goszakup  = any(t in q for t in ["goszakup", "госзакуп"])
+
+    if has_omarket and not has_goszakup:
+        return "omarket"
+    if has_goszakup and not has_omarket:
+        return "goszakup"
+
+    # Контекстные триггеры (без учёта прямых названий)
+    gz_score = sum(1 for t in GOSZAKUP_TRIGGER_WORDS
+                   if t not in ("goszakup", "госзакуп") and t in q)
+    om_score  = sum(1 for t in OMARKET_TRIGGER_WORDS
+                    if t not in ("omarket", "омаркет") and t in q)
+
     if gz_score == 0 and om_score == 0:
         return None
     return "goszakup" if gz_score >= om_score else "omarket"
