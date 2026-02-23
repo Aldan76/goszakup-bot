@@ -444,7 +444,7 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
 
     if platform:
         # Ищем сначала по конкретной платформе (приоритетно)
-        platform_chunks = search_supabase(question, top_n=3, platform=platform)
+        platform_chunks = search_supabase(question, top_n=2, platform=platform)
         if platform_chunks:
             platform_label = "GOSZAKUP.GOV.KZ" if platform == "goszakup" else "OMARKET.KZ"
             platform_context = (
@@ -455,23 +455,23 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
     # ── Шаг 3: Поиск по нормативным чанкам (закон, правила) ──────────────────
     # Если вопрос строго про площадку — законодательные нормы менее важны,
     # берём меньше. Если общий вопрос — берём полный объём.
-    law_top_n = 3 if platform_chunks else 4
+    law_top_n = 2 if platform_chunks else 3
     law_chunks = search_supabase(question, top_n=law_top_n, platform="law")
 
     # Если фильтр по 'law' не дал результатов (старые чанки без source_platform)
     # — ищем без фильтра (обратная совместимость)
     if not law_chunks and not platform_chunks:
-        law_chunks = search_supabase(question, top_n=4)
+        law_chunks = search_supabase(question, top_n=3)
 
     # ── Шаг 4: Нормы ГК РК (если вопрос про договоры, ответственность, etc.) ──
     civil_chunks = []
     if needs_civil_code(question):
-        civil_chunks = search_supabase(question, top_n=3, platform="civil_code")
+        civil_chunks = search_supabase(question, top_n=2, platform="civil_code")
 
     # ── Шаг 5: Нормы Налогового кодекса (если вопрос про НДС, налоги, учет) ─────
     tax_chunks = []
     if needs_tax_code(question):
-        tax_chunks = search_supabase(question, top_n=3, platform="tax")
+        tax_chunks = search_supabase(question, top_n=2, platform="tax")
 
     all_chunks = platform_chunks + law_chunks + civil_chunks + tax_chunks
 
@@ -506,7 +506,13 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
             response = anthropic_client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=1500,
-                system=system,
+                system=[
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ],
                 messages=messages,
             )
             return response.content[0].text, len(all_chunks), bool(ktru_items)
