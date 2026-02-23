@@ -495,22 +495,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     enhanced_question = enhance_question_with_context(user_text, conv_context)
 
     # ── Проверяем нужна ли уточняющий вопрос (clarification) ──────────────────
-    if not detected_platform:
-        try:
-            temp_chunks = search_supabase(user_text, top_n=3)
-            platforms_found = get_platforms_found(temp_chunks)
-
-            if needs_clarification(user_text, platforms_found):
-                clarification_msg = get_clarification_message(platforms_found)
-                if clarification_msg:
-                    context.user_data["waiting_for_clarification"] = True
-                    context.user_data["pending_question"] = user_text
-                    logger.info(f"[clarification] Нужно уточнение: платформы={platforms_found}")
-                    await update.message.reply_text(clarification_msg)
-                    return
-        except Exception as e:
-            logger.warning(f"[clarification] Ошибка проверки: {e}")
-            # Continue without clarification if error occurs
+    # ВРЕМЕННО ОТКЛЮЧЕНО - вызывает ошибки, будет исправлено позже
+    # if not detected_platform:
+    #     try:
+    #         temp_chunks = search_supabase(user_text, top_n=3)
+    #         platforms_found = get_platforms_found(temp_chunks)
+    #
+    #         if needs_clarification(user_text, platforms_found):
+    #             clarification_msg = get_clarification_message(platforms_found)
+    #             if clarification_msg:
+    #                 context.user_data["waiting_for_clarification"] = True
+    #                 context.user_data["pending_question"] = user_text
+    #                 logger.info(f"[clarification] Нужно уточнение: платформы={platforms_found}")
+    #                 await update.message.reply_text(clarification_msg)
+    #                 return
+    #     except Exception as e:
+    #         logger.warning(f"[clarification] Ошибка проверки: {e}")
+    #         pass
 
     await update.message.chat.send_action("typing")
 
