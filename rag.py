@@ -64,6 +64,30 @@ KTRU_TRIGGER_WORDS = [
     "50000 мрп", "50 000 мрп",
 ]
 
+# ─── Конфликтующие нормы: автоматический поиск конфликтов ─────────────────
+# Система для обнаружения конфликтующих норм в законодательстве
+CONFLICTING_NORMS = {
+    "требования_к_персоналу": {
+        "keywords": ["специалист", "эксперт", "персонал", "кадр", "сотрудник", "аттестация", "аккредитация"],
+        "positive_norms": [235, 241],        # Пункты где можно требовать квалификацию
+        "conflicting_norms": [72],           # Пункты где нельзя требовать персонал
+        "trigger_phrase": "требование к специалистам или персоналу",
+        "explanation": "Пункт 72 запрещает требовать конкретных трудовых ресурсов"
+    },
+    "электронная_подпись": {
+        "keywords": ["электронная подпись", "эцп", "цифровая подпись", "эп"],
+        "positive_norms": [40],
+        "exceptions": ["исключение", "кроме случаев"],
+        "trigger_phrase": "требование электронной подписи",
+    },
+    "право_на_участие": {
+        "keywords": ["участие", "исключение", "недопуск", "отклонение", "допуск"],
+        "positive_norms": [9],  # Статья 9 Закона
+        "conflicting_norms": [40, 41, 42],  # Основания для отказа
+        "trigger_phrase": "условия участия или исключения участников",
+    }
+}
+
 
 def check_ktru_perechen(question: str) -> list[dict]:
     """
@@ -399,6 +423,55 @@ def search_supabase(question: str, top_n: int = 6,
     return []
 
 
+def detect_conflicting_norms(question: str, found_chunks: list[dict]) -> dict | None:
+    """
+    Обнаруживает конфликтующие нормы при ответе на вопрос.
+    Возвращает информацию о конфликте или None если конфликта нет.
+    """
+    q_lower = question.lower()
+
+    # Проверяем каждую категорию конфликтов
+    for conflict_type, conflict_data in CONFLICTING_NORMS.items():
+        # Проверяем наличие триггерных слов
+        has_trigger = any(keyword in q_lower for keyword in conflict_data.get("keywords", []))
+
+        if not has_trigger:
+            continue
+
+        # Проверяем найдены ли нормы из positive_norms или conflicting_norms
+        positive_found = any(
+            str(norm) in str(chunk.get("chapter", "")) or str(norm) in str(chunk.get("article_title", ""))
+            for chunk in found_chunks
+            for norm in conflict_data.get("positive_norms", [])
+        )
+
+        conflicting_found = any(
+            str(norm) in str(chunk.get("chapter", "")) or str(norm) in str(chunk.get("article_title", ""))
+            for chunk in found_chunks
+            for norm in conflict_data.get("conflicting_norms", [])
+        )
+
+        # Если нашли хотя бы одну норму - ищем конфликтующие
+        if positive_found or conflicting_found:
+            # Пытаемся найти конфликтующие chunks
+            conflicting_chunks = []
+            for norm in conflict_data.get("conflicting_norms", []):
+                results = search_supabase(f"пункт {norm}", top_n=2, platform="law")
+                if results:
+                    conflicting_chunks.extend(results)
+
+            if conflicting_chunks:
+                return {
+                    "type": conflict_type,
+                    "positive_norms": conflict_data.get("positive_norms", []),
+                    "conflicting_norms": conflict_data.get("conflicting_norms", []),
+                    "conflicting_chunks": conflicting_chunks,
+                    "explanation": conflict_data.get("explanation", "Есть конфликт между нормами"),
+                }
+
+    return None
+
+
 def build_context(chunks: list[dict]) -> str:
     """Формирует текст контекста из найденных чанков."""
     parts = []
@@ -473,7 +546,13 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
     if needs_tax_code(question):
         tax_chunks = search_supabase(question, top_n=2, platform="tax")
 
+    # ── Шаг 6: Обнаружение конфликтующих норм ────────────────────────────────────
     all_chunks = platform_chunks + law_chunks + civil_chunks + tax_chunks
+    conflict_info = detect_conflicting_norms(question, all_chunks)
+    conflict_chunks = []
+    if conflict_info:
+        conflict_chunks = conflict_info.get("conflicting_chunks", [])
+        all_chunks += conflict_chunks
 
     if not all_chunks and not ktru_items:
         return (
@@ -488,8 +567,23 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
         context_parts.append(ktru_context)
     if platform_context:
         context_parts.append(platform_context)
+
+    # Добавляем информацию о конфликтующих нормах если они обнаружены
+    if conflict_info:
+        conflict_explanation = (
+            f"\n⚠️ ВАЖНО: КОНФЛИКТ НОРМ!\n"
+            f"В этом вопросе обнаружен конфликт между нормами закона:\n"
+            f"- Нормы {conflict_info['positive_norms']} разрешают требование\n"
+            f"- Нормы {conflict_info['conflicting_norms']} это требование запрещают\n"
+            f"Объяснение: {conflict_info['explanation']}\n"
+            f"Конфликтующие нормы приведены ниже.\n"
+        )
+        context_parts.append(conflict_explanation)
+
     if law_chunks:
         context_parts.append("# НОРМАТИВНЫЕ ДОКУМЕНТЫ\n\n" + build_context(law_chunks))
+    if conflict_chunks:
+        context_parts.append("# КОНФЛИКТУЮЩИЕ НОРМЫ\n\n" + build_context(conflict_chunks))
     if civil_chunks:
         context_parts.append("# ГРАЖДАНСКИЙ КОДЕКС РК (РЕЛЕВАНТНЫЕ СТАТЬИ)\n\n" + build_context(civil_chunks))
     if tax_chunks:
