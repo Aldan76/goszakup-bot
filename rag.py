@@ -91,20 +91,22 @@ CONFLICTING_NORMS = {
         "explanation": "Статья 9 гарантирует право на участие, но пункты 40-42 дают исчерпывающие основания для отказа",
         "conflict_chunk_ids": ["conflict_participation_rights_007", "conflict_exclusion_grounds_008", "conflict_discrimination_009"]
     },
-    # SECONDARY CONFLICTS (Вторичные конфликты - для будущего расширения)
+    # SECONDARY CONFLICTS (Вторичные конфликты - Phase 4 расширение)
     "электронная_подпись_vs_исключения": {
-        "keywords": ["электронная подпись", "эцп", "иностранный документ", "нотариальное", "завещание"],
+        "keywords": ["электронная подпись", "эцп", "иностранный", "нотариальное", "завещание", "дарение", "иностранной", "апостиль", "исключение", "регистрация", "иностранные", "недвижимость", "право собственности"],
         "positive_norms": [40],
         "conflicting_norms": [16],  # Статья 16 Закона об ЭЦП содержит исключения
-        "trigger_phrase": "исключения из требования ЭЦП",
-        "conflict_chunk_ids": ["conflict_eps_punkt40_006"]
+        "trigger_phrase": "исключения из требования ЭЦП для иностранных и особых документов",
+        "explanation": "Пункт 40 требует ЭЦП, но Статья 16 Закона об ЭЦП содержит исключения для иностранных документов, завещаний, дарений и документов о недвижимости",
+        "conflict_chunk_ids": ["conflict_eps_exceptions_010_20260224_001", "conflict_eps_exceptions_011_20260224_001"]
     },
     "дискриминация": {
-        "keywords": ["дискриминация", "малое предприятие", "опыт", "аккредитация", "размер компании", "место нахождения"],
+        "keywords": ["дискриминация", "малое предприятие", "опыт", "аккредитация", "размер компании", "место нахождения", "минимум сотрудников", "барьер", "требование к компании", "iso", "сертификация", "опыт работы"],
         "positive_norms": [9, 5],                # Статья 9 и Пункт 5 запрещают дискриминацию
-        "conflicting_norms": [],                 # Требования, которые могут быть дискриминационными
-        "trigger_phrase": "требования, которые могут создавать барьеры для участия",
-        "conflict_chunk_ids": ["conflict_discrimination_009"]
+        "conflicting_norms": [40, 41, 42],      # Пункты 40-42 дают основания для отказа, но они не должны быть дискриминационными
+        "trigger_phrase": "требования, которые могут создавать необоснованные барьеры для участия",
+        "explanation": "Статья 9 и Пункт 5 запрещают дискриминацию по любым признакам, включая косвенную дискриминацию через чрезмерные требования",
+        "conflict_chunk_ids": ["conflict_discrimination_009", "conflict_discrimination_010_20260224_001", "conflict_discrimination_011_20260224_001"]
     }
 }
 
@@ -476,8 +478,12 @@ def detect_conflicting_norms(question: str, found_chunks: list[dict]) -> dict | 
             for norm in conflict_data.get("conflicting_norms", [])
         )
 
-        # Если нашли хотя бы одну норму - ищем конфликтующие
-        if positive_found or conflicting_found:
+        # Для вторичных конфликтов: если есть триггер и predefined chunks - загружаем их напрямую
+        # Для основных конфликтов: требуем найти норму в chunks
+        has_predefined_chunks = bool(conflict_data.get("conflict_chunk_ids", []))
+        is_secondary = conflict_type in ["электронная_подпись_vs_исключения", "дискриминация"]
+
+        if (positive_found or conflicting_found) or (is_secondary and has_trigger and has_predefined_chunks):
             conflicting_chunks = []
 
             # Вариант 1: Используем predefined chunk IDs (приоритет)
@@ -611,7 +617,7 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
     # Добавляем информацию о конфликтующих нормах если они обнаружены
     if conflict_info:
         conflict_explanation = (
-            f"\n⚠️ ВАЖНО: КОНФЛИКТ НОРМ!\n"
+            f"\n[WARNING] ВАЖНО: КОНФЛИКТ НОРМ!\n"
             f"В этом вопросе обнаружен конфликт между нормами закона:\n"
             f"- Нормы {conflict_info['positive_norms']} разрешают требование\n"
             f"- Нормы {conflict_info['conflicting_norms']} это требование запрещают\n"
