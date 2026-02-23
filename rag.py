@@ -15,6 +15,7 @@ import re
 from anthropic import Anthropic
 from supabase import create_client
 from dotenv import load_dotenv
+from answer_rejection_system import AnswerRejectionSystem
 
 load_dotenv(override=True)
 
@@ -661,18 +662,32 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
             from hallucination_prevention import validate_answer_for_hallucinations
             validation = validate_answer_for_hallucinations(answer, all_chunks)
 
-            # Если обнаружены критические проблемы - добавляем предупреждение
+            # ── НОВОЕ: Система отклонения ненадежных ответов ────────────────────
+            should_reject, rejection_reason = AnswerRejectionSystem.should_reject_answer(
+                answer=answer,
+                confidence=validation["confidence"],
+                has_critical_issues=len(validation["critical_issues"]) > 0,
+                is_multiple_interpretations=AnswerRejectionSystem.detect_multiple_interpretations(answer),
+                source_coverage=validation["source_coverage"]
+            )
+
+            if should_reject:
+                # Ответ не прошел валидацию - отклонить и предложить альтернативу
+                rejection_message = AnswerRejectionSystem.get_rejection_message(rejection_reason)
+                return rejection_message, len(all_chunks), False  # is_reliable=False
+
+            # Если ответ прошел отклонение, но есть предупреждения - добавить их
             if validation["critical_issues"]:
-                warning = "\n\n⚠️ [ВНИМАНИЕ - ПРОВЕРКА ИСТОЧНИКОВ]:\n"
+                warning = "\n\n[WARNING] ПРОВЕРКА ИСТОЧНИКОВ:\n"
                 for issue in validation["critical_issues"]:
                     warning += f"- {issue['message']}\n"
                 answer = answer + warning
 
-            # Если низкая уверенность - добавляем рекомендацию
-            if validation["confidence"] < 0.6:
+            # Если сомнительная уверенность - добавить примечание
+            if validation["confidence"] < 0.85:
                 answer += (
-                    f"\n\n📝 Примечание бота: Уверенность в ответе только {validation['confidence']:.0%}. "
-                    f"Рекомендуется проверить источники или переформулировать вопрос."
+                    f"\n\nПримечание: Уверенность в ответе {validation['confidence']:.0%}. "
+                    f"Проверьте источники если вопрос критически важен."
                 )
 
             return answer, len(all_chunks), bool(ktru_items)
