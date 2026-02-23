@@ -487,12 +487,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     confidence = 0.9 if detected_platform else 0.6
     conv_context.update_context(user_text, detected_platform, detected_topic, confidence)
 
-    # Добавляем контекст к вопросу для RAG поиска
-    enhanced_question = enhance_question_with_context(user_text, conv_context)
-
     logger.info(f"[chat_id={chat_id}] Вопрос: {user_text[:80]}")
     if detected_platform:
         logger.info(f"[context] Платформа: {detected_platform}, Тема: {detected_topic}, Уверенность: {confidence:.1f}")
+
+    # Добавляем контекст к вопросу для RAG поиска
+    enhanced_question = enhance_question_with_context(user_text, conv_context)
 
     # ── Проверяем нужна ли уточняющий вопрос (clarification) ──────────────────
     if not detected_platform:
