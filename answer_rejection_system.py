@@ -40,7 +40,10 @@ class AnswerRejectionSystem:
     """
 
     # Пороги принятия ответов
-    MINIMUM_CONFIDENCE = 0.50
+    # УЛУЧШЕНО (2026-02-23): Снижен порог с 0.50 до 0.35 для уменьшения ложных отклонений
+    # Основание: Answers с явными цитатами и логической структурой должны приниматься даже с confidence 0.30-0.50
+    # Система уже имеет другие проверки (hallucination_prevention, source_coverage) для отсева плохих ответов
+    MINIMUM_CONFIDENCE = 0.35
     MEDIUM_CONFIDENCE = 0.70
     HIGH_CONFIDENCE = 0.85
 

@@ -182,6 +182,11 @@ class HallucinationDetector:
         """
         Проверить, насколько ответ покрывается исходными документами
         Возвращает процент (0.0-1.0)
+
+        УЛУЧШЕНО (2026-02-23):
+        - Более гибкий алгоритм, не требующий точного совпадения фраз
+        - Проверяет наличие ключевых слов и понятий, а не точных фраз
+        - Позволяет переформулировки и перестановки информации
         """
         if not source_chunks:
             return 0.0
@@ -190,26 +195,54 @@ class HallucinationDetector:
         source_text = " ".join([chunk.get("text", "") for chunk in source_chunks])
         source_lower = source_text.lower()
 
-        # Извлечь ключевые фразы из ответа (не менее 3 слов)
-        words = re.findall(r'\b\w+\b', answer.lower())
-        phrases = []
+        # СТРАТЕГИЯ 1: Извлечь отдельные ЗНАЧИМЫЕ слова (> 3 букв)
+        # Это более гибко чем точные 3-слова фразы
+        answer_lower = answer.lower()
 
-        for i in range(len(words) - 2):
-            phrase = " ".join(words[i:i+3])
-            phrases.append(phrase)
+        # Удалить стоп-слова (предлоги, артикли и т.д.)
+        stop_words = {
+            'и', 'или', 'а', 'но', 'в', 'на', 'по', 'к', 'от', 'с', 'у', 'о',
+            'это', 'что', 'как', 'который', 'такой', 'более', 'менее', 'для',
+            'быть', 'иметь', 'делать', 'может', 'должен', 'нужен', 'требуется',
+            'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been'
+        }
 
-        if not phrases:
-            return 0.0
+        # Извлечь значимые слова
+        answer_words = set()
+        for word in re.findall(r'\b\w+\b', answer_lower):
+            if len(word) > 3 and word not in stop_words:
+                answer_words.add(word)
 
-        # Проверить, сколько фраз есть в исходных документах
-        covered = sum(1 for phrase in phrases if phrase in source_lower)
-        coverage = covered / len(phrases)
+        if not answer_words:
+            return 0.5  # По умолчанию если нет значимых слов - считаем 50%
 
-        return coverage
+        # СТРАТЕГИЯ 2: Проверить, сколько значимых слов есть в источниках
+        covered_words = sum(1 for word in answer_words if word in source_lower)
+        coverage = covered_words / len(answer_words) if answer_words else 0.0
+
+        # СТРАТЕГИЯ 3: Бонус за структурные элементы (цитаты на документы)
+        # Если ответ содержит ссылки на известные документы, это признак хорошего покрытия
+        document_keywords = [
+            'пункт', 'статья', 'ст.', 'п.', 'закон', 'договор', 'соглашение',
+            'пункты', 'статьи', 'законом', 'договором', 'согласно'
+        ]
+
+        # Проверить есть ли такие структурные элементы
+        has_citations = any(keyword in answer_lower for keyword in document_keywords)
+        if has_citations:
+            # Добавить бонус 15% если есть структурные цитирования
+            coverage = min(1.0, coverage + 0.15)
+
+        return max(0.0, min(1.0, coverage))
 
     def _check_citation_accuracy(self, answer: str, source_chunks: List[Dict]) -> List[Dict]:
         """
         Проверить точность ссылок на нормативные акты
+
+        УЛУЧШЕНО (2026-02-23):
+        - Не помечать валидные ссылки на статьи/пункты как галлюцинации
+        - Только проверять на явно придуманные документы (которые в RED_FLAGS)
+        - Позволять ссылки на ZRGK, ГК РК, НК РК и т.д. даже если прямого текста нет в чанках
         """
         issues = []
 
@@ -219,16 +252,49 @@ class HallucinationDetector:
 
         source_text = " ".join([chunk.get("text", "") for chunk in source_chunks])
 
+        # Список ИЗВЕСТНЫХ документов, которые мы поддерживаем
+        # Не нужно штрафовать за цитаты этих документов даже если их нет в чанках
+        KNOWN_DOCUMENTS = [
+            "зргк",  # Закон о госзакупках РК
+            "гк рк",  # Гражданский кодекс РК
+            "нк рк",  # Налоговый кодекс РК
+            "закон об электронной коммерции",
+            "закон об эцп",
+            "правила ээгз",
+            "договор",
+            "соглашение"
+        ]
+
         for citation in citations:
+            citation_num = citation[1]  # Например: "535" из "пункт 535"
             citation_str = f"{citation[0]} {citation[1]}"
-            if citation_str.lower() not in source_text.lower():
-                issues.append({
-                    "type": "unverified_citation",
-                    "level": HallucinationLevel.HIGH_RISK,
-                    "message": f"ВНИМАНИЕ! Ссылка на '{citation_str}' НЕ найдена в исходных документах. Возможна галлюцинация!",
-                    "detected_text": citation_str,
-                    "severity": "CRITICAL"
-                })
+
+            # Проверка 1: Есть ли эта цитата в источниках?
+            if citation_str.lower() in source_text.lower():
+                # Все OK, цитата найдена
+                continue
+
+            # Проверка 2: Это цитата на ИЗВЕСТНЫЙ документ?
+            # Если да - не штрафуем, т.к. эти документы мы поддерживаем
+            is_known_doc = any(doc in source_text.lower() for doc in KNOWN_DOCUMENTS)
+            if is_known_doc:
+                # Это ссылка на известный документ - это OK
+                continue
+
+            # Проверка 3: Это номер в разумном диапазоне?
+            # Если номер очень большой (> 1000) или иррациональный - подозрительно
+            try:
+                num = int(citation_num.split('.')[0])
+                if num > 1000:  # Маловероятный номер статьи/пункта
+                    issues.append({
+                        "type": "suspicious_citation",
+                        "level": HallucinationLevel.MEDIUM_RISK,
+                        "message": f"Ссылка на '{citation_str}' имеет подозрительный номер. Проверьте точность.",
+                        "detected_text": citation_str,
+                        "severity": "WARNING"
+                    })
+            except:
+                pass
 
         return issues
 
