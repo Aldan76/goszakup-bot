@@ -65,26 +65,46 @@ KTRU_TRIGGER_WORDS = [
 ]
 
 # ─── Конфликтующие нормы: автоматический поиск конфликтов ─────────────────
-# Система для обнаружения конфликтующих норм в законодательстве
+# Система для обнаружения конфликтующих норм в законодательстве (Фаза 2 расширения)
 CONFLICTING_NORMS = {
     "требования_к_персоналу": {
-        "keywords": ["специалист", "эксперт", "персонал", "кадр", "сотрудник", "аттестация", "аккредитация"],
-        "positive_norms": [235, 241],        # Пункты где можно требовать квалификацию
-        "conflicting_norms": [72],           # Пункты где нельзя требовать персонал
+        "keywords": ["специалист", "эксперт", "персонал", "кадр", "сотрудник", "аттестация", "аккредитация", "квалификация"],
+        "positive_norms": [235, 241],           # Пункты где можно требовать квалификацию
+        "conflicting_norms": [72],              # Пункт 72 запрещает требовать конкретные трудовые ресурсы
         "trigger_phrase": "требование к специалистам или персоналу",
-        "explanation": "Пункт 72 запрещает требовать конкретных трудовых ресурсов"
+        "explanation": "Пункт 72 запрещает требовать конкретных трудовых ресурсов",
+        "conflict_chunk_ids": ["conflict_punkt72_personal_001_20260223_001", "conflict_punkt235_241_003_20260223_001"]
     },
     "электронная_подпись": {
-        "keywords": ["электронная подпись", "эцп", "цифровая подпись", "эп"],
-        "positive_norms": [40],
-        "exceptions": ["исключение", "кроме случаев"],
-        "trigger_phrase": "требование электронной подписи",
+        "keywords": ["электронная подпись", "эцп", "цифровая подпись", "эп", "документ"],
+        "positive_norms": [40],                 # Пункт 40 требует ЭЦП
+        "conflicting_grounds": ["нотариальное удостоверение", "завещание", "дарение", "недвижимость"],  # Исключения
+        "trigger_phrase": "требование электронной подписи и исключения",
+        "explanation": "Пункт 40 требует ЭЦП, но есть исключения в Законе об ЭЦП",
+        "conflict_chunk_ids": ["conflict_eps_punkt40_006"]
     },
     "право_на_участие": {
-        "keywords": ["участие", "исключение", "недопуск", "отклонение", "допуск"],
-        "positive_norms": [9],  # Статья 9 Закона
-        "conflicting_norms": [40, 41, 42],  # Основания для отказа
-        "trigger_phrase": "условия участия или исключения участников",
+        "keywords": ["участие", "допуск", "отклонение", "исключение", "отказ", "дискриминация", "ограничение", "требование к компании"],
+        "positive_norms": [9],                  # Статья 9 Закона - право на участие
+        "conflicting_norms": [40, 41, 42],      # Пункты 40-42 дают исчерпывающие основания для отказа
+        "trigger_phrase": "условия участия, допуска или отклонения участников",
+        "explanation": "Статья 9 гарантирует право на участие, но пункты 40-42 дают исчерпывающие основания для отказа",
+        "conflict_chunk_ids": ["conflict_participation_rights_007", "conflict_exclusion_grounds_008", "conflict_discrimination_009"]
+    },
+    # SECONDARY CONFLICTS (Вторичные конфликты - для будущего расширения)
+    "электронная_подпись_vs_исключения": {
+        "keywords": ["электронная подпись", "эцп", "иностранный документ", "нотариальное", "завещание"],
+        "positive_norms": [40],
+        "conflicting_norms": [16],  # Статья 16 Закона об ЭЦП содержит исключения
+        "trigger_phrase": "исключения из требования ЭЦП",
+        "conflict_chunk_ids": ["conflict_eps_punkt40_006"]
+    },
+    "дискриминация": {
+        "keywords": ["дискриминация", "малое предприятие", "опыт", "аккредитация", "размер компании", "место нахождения"],
+        "positive_norms": [9, 5],                # Статья 9 и Пункт 5 запрещают дискриминацию
+        "conflicting_norms": [],                 # Требования, которые могут быть дискриминационными
+        "trigger_phrase": "требования, которые могут создавать барьеры для участия",
+        "conflict_chunk_ids": ["conflict_discrimination_009"]
     }
 }
 
@@ -427,6 +447,11 @@ def detect_conflicting_norms(question: str, found_chunks: list[dict]) -> dict | 
     """
     Обнаруживает конфликтующие нормы при ответе на вопрос.
     Возвращает информацию о конфликте или None если конфликта нет.
+
+    Фаза 2 (расширение): Поддерживает 3 основных типа конфликтов:
+    1. требования_к_персоналу (Пункт 72 vs Пункты 235-241)
+    2. электронная_подпись (Пункт 40 vs Исключения)
+    3. право_на_участие (Статья 9 vs Пункты 40-42, Дискриминация)
     """
     q_lower = question.lower()
 
@@ -453,13 +478,27 @@ def detect_conflicting_norms(question: str, found_chunks: list[dict]) -> dict | 
 
         # Если нашли хотя бы одну норму - ищем конфликтующие
         if positive_found or conflicting_found:
-            # Пытаемся найти конфликтующие chunks
             conflicting_chunks = []
-            for norm in conflict_data.get("conflicting_norms", []):
-                results = search_supabase(f"пункт {norm}", top_n=2, platform="law")
-                if results:
-                    conflicting_chunks.extend(results)
 
+            # Вариант 1: Используем predefined chunk IDs (приоритет)
+            conflict_chunk_ids = conflict_data.get("conflict_chunk_ids", [])
+            if conflict_chunk_ids:
+                try:
+                    for chunk_id in conflict_chunk_ids:
+                        result = supabase.table("chunks").select("*").eq("id", chunk_id).execute()
+                        if result.data:
+                            conflicting_chunks.extend(result.data)
+                except Exception:
+                    pass
+
+            # Вариант 2: Если predefined chunks не найдены - ищем по нормам
+            if not conflicting_chunks:
+                for norm in conflict_data.get("conflicting_norms", []):
+                    results = search_supabase(f"пункт {norm}", top_n=2, platform="law")
+                    if results:
+                        conflicting_chunks.extend(results)
+
+            # Возвращаем результат если нашли конфликт
             if conflicting_chunks:
                 return {
                     "type": conflict_type,
@@ -467,6 +506,7 @@ def detect_conflicting_norms(question: str, found_chunks: list[dict]) -> dict | 
                     "conflicting_norms": conflict_data.get("conflicting_norms", []),
                     "conflicting_chunks": conflicting_chunks,
                     "explanation": conflict_data.get("explanation", "Есть конфликт между нормами"),
+                    "trigger_phrase": conflict_data.get("trigger_phrase", ""),
                 }
 
     return None
