@@ -655,7 +655,27 @@ def answer_question(question: str, conversation_history: list) -> tuple[str, int
                 ],
                 messages=messages,
             )
-            return response.content[0].text, len(all_chunks), bool(ktru_items)
+            answer = response.content[0].text
+
+            # ── Валидация на галлюцинации ─────────────────────────────────────
+            from hallucination_prevention import validate_answer_for_hallucinations
+            validation = validate_answer_for_hallucinations(answer, all_chunks)
+
+            # Если обнаружены критические проблемы - добавляем предупреждение
+            if validation["critical_issues"]:
+                warning = "\n\n⚠️ [ВНИМАНИЕ - ПРОВЕРКА ИСТОЧНИКОВ]:\n"
+                for issue in validation["critical_issues"]:
+                    warning += f"- {issue['message']}\n"
+                answer = answer + warning
+
+            # Если низкая уверенность - добавляем рекомендацию
+            if validation["confidence"] < 0.6:
+                answer += (
+                    f"\n\n📝 Примечание бота: Уверенность в ответе только {validation['confidence']:.0%}. "
+                    f"Рекомендуется проверить источники или переформулировать вопрос."
+                )
+
+            return answer, len(all_chunks), bool(ktru_items)
         except Exception as e:
             err = str(e)
             if "rate_limit" in err and attempt < 2:
