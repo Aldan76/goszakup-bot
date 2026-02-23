@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Переписка - Админ Панель</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        .navbar {
+            background: #2c3e50;
+            color: white;
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .navbar h1 {
+            font-size: 24px;
+        }
+
+        .navbar a {
+            color: white;
+            text-decoration: none;
+            margin-left: 20px;
+            padding: 8px 15px;
+            background: #34495e;
+            border-radius: 4px;
+            transition: background 0.3s;
+        }
+
+        .navbar a:hover {
+            background: #1a252f;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 20px auto;
+            padding: 0 20px;
+        }
+
+        .filters {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .filters input,
+        .filters button {
+            padding: 10px 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .filters input {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .filters button {
+            background: #3498db;
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .filters button:hover {
+            background: #2980b9;
+        }
+
+        .messages-container {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .message-item {
+            border-bottom: 1px solid #eee;
+            padding: 20px;
+            transition: background 0.2s;
+        }
+
+        .message-item:last-child {
+            border-bottom: none;
+        }
+
+        .message-item:hover {
+            background: #f9f9f9;
+        }
+
+        .message-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .message-user {
+            font-weight: bold;
+            color: #2c3e50;
+            font-size: 16px;
+        }
+
+        .message-time {
+            color: #999;
+            font-size: 13px;
+        }
+
+        .message-content {
+            margin-top: 10px;
+            line-height: 1.6;
+            color: #555;
+        }
+
+        .message-question {
+            background: #ecf0f1;
+            padding: 10px 15px;
+            border-left: 3px solid #3498db;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+
+        .message-question strong {
+            color: #2980b9;
+        }
+
+        .message-answer {
+            background: #f0fdf4;
+            padding: 10px 15px;
+            border-left: 3px solid #10b981;
+            margin: 10px 0;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .message-meta {
+            display: flex;
+            gap: 20px;
+            margin-top: 10px;
+            font-size: 13px;
+            color: #666;
+            flex-wrap: wrap;
+        }
+
+        .meta-badge {
+            background: #f0f0f0;
+            padding: 3px 8px;
+            border-radius: 3px;
+            display: inline-block;
+        }
+
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            margin-top: 20px;
+            padding: 20px;
+        }
+
+        .pagination button {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            background: white;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.3s;
+        }
+
+        .pagination button:hover:not(:disabled) {
+            background: #3498db;
+            color: white;
+            border-color: #3498db;
+        }
+
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .pagination .page-info {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>Переписка пользователей</h1>
+        <div>
+            <span>Добро пожаловать, {{ admin_name }}!</span>
+            <a href="/">На главную</a>
+            <a href="/logout">Выход</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="filters">
+            <input
+                type="text"
+                id="userIdFilter"
+                placeholder="Фильтр по ID пользователя (chat_id)"
+                value=""
+            >
+            <button onclick="applyFilter()">Применить фильтр</button>
+            <button onclick="clearFilter()">Очистить</button>
+        </div>
+
+        <div id="messages" class="messages-container">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Загрузка сообщений...</p>
+            </div>
+        </div>
+
+        <div class="pagination">
+            <button id="prevBtn" onclick="previousPage()" disabled>← Предыдущая</button>
+            <span class="page-info">
+                Страница <span id="currentPage">1</span> из <span id="totalPages">1</span>
+                (всего <span id="totalMessages">0</span> сообщений)
+            </span>
+            <button id="nextBtn" onclick="nextPage()">Следующая →</button>
+        </div>
+    </div>
+
+    <script>
+        let currentPage = 1;
+        let totalPages = 1;
+        let totalMessages = 0;
+        let filterUserId = null;
+
+        async function loadMessages(page = 1) {
+            const url = `/api/messages?page=${page}&limit=100` + (filterUserId ? `&user_id=${filterUserId}` : '');
+
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Ошибка при загрузке сообщений');
+                }
+
+                renderMessages(data.messages);
+                currentPage = data.page;
+                totalPages = data.total_pages;
+                totalMessages = data.total;
+
+                updatePagination();
+            } catch (error) {
+                document.getElementById('messages').innerHTML = `
+                    <div class="error">
+                        ${error.message}
+                    </div>
+                `;
+            }
+        }
+
+        function renderMessages(messages) {
+            if (!messages || messages.length === 0) {
+                document.getElementById('messages').innerHTML = '<div class="empty">Сообщений не найдено</div>';
+                return;
+            }
+
+            let html = '';
+            messages.forEach(msg => {
+                const date = new Date(msg.created_at);
+                const formattedDate = date.toLocaleString('ru-RU');
+                const questionPreview = (msg.question || '').substring(0, 100) + (msg.question?.length > 100 ? '...' : '');
+                const answerPreview = (msg.answer || '').substring(0, 200) + (msg.answer?.length > 200 ? '...' : '');
+
+                html += `
+                    <div class="message-item">
+                        <div class="message-header">
+                            <span class="message-user">ID пользователя: ${msg.chat_id}</span>
+                            <span class="message-time">${formattedDate}</span>
+                        </div>
+                        <div class="message-content">
+                            <div class="message-question">
+                                <strong>Вопрос:</strong><br>
+                                ${msg.question}
+                            </div>
+                            <div class="message-answer">
+                                <strong>Ответ:</strong><br>
+                                ${msg.answer}
+                            </div>
+                            <div class="message-meta">
+                                <span class="meta-badge">📊 Чанков: ${msg.chunks_used || 0}</span>
+                                <span class="meta-badge">🔍 КТРУ: ${msg.ktru_found ? 'Найдено' : 'Не найдено'}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            document.getElementById('messages').innerHTML = html;
+        }
+
+        function updatePagination() {
+            document.getElementById('currentPage').textContent = currentPage;
+            document.getElementById('totalPages').textContent = totalPages;
+            document.getElementById('totalMessages').textContent = totalMessages;
+
+            document.getElementById('prevBtn').disabled = currentPage <= 1;
+            document.getElementById('nextBtn').disabled = currentPage >= totalPages;
+        }
+
+        function previousPage() {
+            if (currentPage > 1) {
+                loadMessages(currentPage - 1);
+            }
+        }
+
+        function nextPage() {
+            if (currentPage < totalPages) {
+                loadMessages(currentPage + 1);
+            }
+        }
+
+        function applyFilter() {
+            const userIdInput = document.getElementById('userIdFilter').value.trim();
+            filterUserId = userIdInput ? parseInt(userIdInput) : null;
+            currentPage = 1;
+            loadMessages(1);
+        }
+
+        function clearFilter() {
+            document.getElementById('userIdFilter').value = '';
+            filterUserId = null;
+            currentPage = 1;
+            loadMessages(1);
+        }
+
+        // Загрузить сообщения при загрузке страницы
+        loadMessages(1);
+
+        // Автообновление каждые 10 секунд
+        setInterval(() => {
+            loadMessages(currentPage);
+        }, 10000);
+    </script>
+</body>
+</html>
