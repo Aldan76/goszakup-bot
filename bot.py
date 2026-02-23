@@ -26,7 +26,18 @@ from telegram.ext import (
     ContextTypes,
 )
 from dotenv import load_dotenv
-from rag import answer_question, supabase
+from rag import answer_question, supabase, detect_platform, search_supabase
+from conversation_context import (
+    ConversationContext,
+    infer_topic_from_question,
+    enhance_question_with_context,
+)
+from rag_enhanced import (
+    get_platforms_found,
+    needs_clarification,
+    get_clarification_message,
+    parse_platform_response,
+)
 
 load_dotenv()
 
@@ -304,6 +315,22 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(HELP_MESSAGE)
 
 
+async def reset_context_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Сбросить контекст диалога (тема, платформа, история)."""
+    chat_id = update.effective_chat.id
+
+    # Очищаем контекст диалога
+    if "conversation_context" in context.user_data:
+        context.user_data["conversation_context"].reset()
+        logger.info(f"[context] Контекст диалога сброшен для пользователя {chat_id}")
+        await update.message.reply_text(
+            "✅ Контекст диалога очищен. Начнём новый диалог с чистого листа!\n"
+            "Теперь я не помню о предыдущих темах и платформах."
+        )
+    else:
+        await update.message.reply_text("Контекст уже был пуст.")
+
+
 async def docs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Официальные источники и ссылки на документы."""
     # Используем автоматически генерируемое сообщение со ссылками из bot_messages.py
@@ -375,17 +402,120 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Спасибо за отзыв! 🙏 Мы учтём это.")
         return
 
+    # ── Проверяем: ждём ли уточнение по платформе (clarification)? ──────────────
+    if context.user_data.get("waiting_for_clarification"):
+        platform = parse_platform_response(user_text)
+        if platform:
+            original_question = context.user_data.get("pending_question", user_text)
+            context.user_data["waiting_for_clarification"] = False
+            context.user_data.pop("pending_question", None)
+            logger.info(f"[clarification] Уточнение получено: платформа={platform}")
+            # Перезапросить с явной платформой в памяти контекста
+            if chat_id not in conversation_histories:
+                conversation_histories[chat_id] = []
+            history = conversation_histories[chat_id]
+            try:
+                answer, chunks_used, ktru_found = answer_question(original_question, history)
+                log_conversation(chat_id, original_question, answer, chunks_used, ktru_found)
+                history.append({"role": "user", "content": original_question})
+                history.append({"role": "assistant", "content": answer})
+                if len(history) > MAX_HISTORY_PAIRS * 2:
+                    conversation_histories[chat_id] = history[-MAX_HISTORY_PAIRS * 2:]
+
+                chunks = [answer[i:i + 4096] for i in range(0, len(answer), 4096)]
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("👍 Полезно",    callback_data="like"),
+                    InlineKeyboardButton("👎 Не полезно", callback_data="dislike"),
+                ]])
+                bot_msg = None
+                for i, chunk in enumerate(chunks):
+                    is_last = (i == len(chunks) - 1)
+                    html_chunk = md_to_html(chunk)
+                    try:
+                        bot_msg = await update.message.reply_text(
+                            html_chunk,
+                            parse_mode="HTML",
+                            reply_markup=keyboard if is_last else None,
+                        )
+                    except Exception:
+                        bot_msg = await update.message.reply_text(
+                            chunk,
+                            reply_markup=keyboard if is_last else None,
+                        )
+                if bot_msg:
+                    context.user_data["last_msg_id"] = bot_msg.message_id
+                    context.user_data["last_question"] = original_question
+                    context.user_data["last_answer"] = answer
+            except Exception as e:
+                logger.error(f"[clarification] Ошибка обработки уточнения: {e}", exc_info=True)
+                await update.message.reply_text(
+                    "⚠️ Ошибка при обработке уточнения. Попробуйте ещё раз."
+                )
+            return
+        else:
+            await update.message.reply_text(
+                "❓ Не смог понять платформу. Пожалуйста, ответьте:\n"
+                "• '1' или 'omarket' — для Omarket.kz\n"
+                "• '2' или 'goszakup' — для портала госзакупок"
+            )
+            return
+
     # ── Обычный вопрос ────────────────────────────────────────────────────────
     if chat_id not in conversation_histories:
         conversation_histories[chat_id] = []
 
     history = conversation_histories[chat_id]
 
-    await update.message.chat.send_action("typing")
+    # ── Инициализируем / получаем контекст диалога ────────────────────────────
+    if "conversation_context" not in context.user_data:
+        context.user_data["conversation_context"] = ConversationContext(chat_id)
+
+    conv_context = context.user_data["conversation_context"]
+
+    # ── Определяем платформу и тему ─────────────────────────────────────────
+    detected_platform = detect_platform(user_text)
+
+    # Если платформа не явно указана, используем память контекста
+    if not detected_platform and conv_context.get_assumed_platform():
+        detected_platform = conv_context.get_assumed_platform()
+        logger.info(f"[context] Используем платформу из памяти: {detected_platform}")
+
+    # Определяем тему вопроса
+    detected_topic = infer_topic_from_question(user_text)
+
+    # Обновляем контекст диалога
+    confidence = 0.9 if detected_platform else 0.6
+    conv_context.update_context(user_text, detected_platform, detected_topic, confidence)
+
+    # Добавляем контекст к вопросу для RAG поиска
+    enhanced_question = enhance_question_with_context(user_text, conv_context)
+
     logger.info(f"[chat_id={chat_id}] Вопрос: {user_text[:80]}")
+    if detected_platform:
+        logger.info(f"[context] Платформа: {detected_platform}, Тема: {detected_topic}, Уверенность: {confidence:.1f}")
+
+    # ── Проверяем нужна ли уточняющий вопрос (clarification) ──────────────────
+    if not detected_platform:
+        try:
+            temp_chunks = search_supabase(user_text, top_n=3)
+            platforms_found = get_platforms_found(temp_chunks)
+
+            if needs_clarification(user_text, platforms_found):
+                clarification_msg = get_clarification_message(platforms_found)
+                if clarification_msg:
+                    context.user_data["waiting_for_clarification"] = True
+                    context.user_data["pending_question"] = user_text
+                    logger.info(f"[clarification] Нужно уточнение: платформы={platforms_found}")
+                    await update.message.reply_text(clarification_msg)
+                    return
+        except Exception as e:
+            logger.warning(f"[clarification] Ошибка проверки: {e}")
+            # Continue without clarification if error occurs
+
+    await update.message.chat.send_action("typing")
 
     try:
-        answer, chunks_used, ktru_found = answer_question(user_text, history)
+        answer, chunks_used, ktru_found = answer_question(enhanced_question, history)
 
         # Логируем Q&A в Supabase
         log_conversation(
@@ -581,6 +711,7 @@ def main() -> None:
     app.add_handler(CommandHandler("help",   help_command))
     app.add_handler(CommandHandler("docs",   docs_command))
     app.add_handler(CommandHandler("clear",  clear))
+    app.add_handler(CommandHandler("reset",  reset_context_command))
     app.add_handler(CommandHandler("ban",    ban_command))
     app.add_handler(CommandHandler("unban",  unban_command))
     app.add_handler(CommandHandler("stats",  admin_stats))
